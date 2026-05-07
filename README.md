@@ -148,3 +148,54 @@ This project draws inspiration and builds upon excellent open-source work, inclu
 This codebase is licensed under [Apache-2.0](LICENSE).
 
 This project will download and install additional third-party open source software projects. Review the license terms of these open source projects before use.
+
+
+一、环境配置（只需做一次）
+# 1. 清理掉之前那个空壳（如果你那个 (soma-retargeter) 提示还残留就跑这步）
+rm -rf /home/wayne/miniconda3/envs/soma-retargeter
+# 2. 创建干净的 Python 3.12 环境
+conda create -n soma-retargeter python=3.12 -y
+# 3. 激活环境
+conda activate soma-retargeter
+# 4. 进项目目录
+cd /home/wayne/soma-retargeter
+# 5. 拉 LFS 大文件（BVH 样例 + USD mesh）
+git lfs install --local
+git lfs pull
+# 6. 安装项目（必须带 NVIDIA 的 pypi index，warp-lang 1.12.0 只在那有）
+pip install --extra-index-url https://pypi.nvidia.com .
+# 7.（可选）GUI 文件对话框需要 tkinter；conda 的 python 3.12 一般自带，没有再装
+sudo apt-get install -y python3.12-tk
+验证安装
+python -c "import newton, warp, soma_retargeter; print('newton', newton.__version__, '| warp', warp.__version__, '| OK')"
+预期输出（首次会触发 Warp 初始化日志，能看到 cuda:0 NVIDIA GeForce RTX 5070 Laptop GPU 就对了）：
+
+newton 1.0.0 | warp 1.12.0 | OK
+二、日常运行
+每次开新终端时，先激活环境：
+
+conda activate soma-retargeter
+cd /home/wayne/soma-retargeter-plus
+然后选一个跑法：
+
+1) 交互式 GUI（OpenGL viewer）
+python ./app/bvh_to_csv_converter.py \
+  --config ./assets/default_bvh_to_csv_converter_config.json \
+  --viewer gl
+GUI 里：右下角面板 Load 选一个 .bvh → Retarget → CSV 那行 Save 导出。
+
+2) 批量无头处理（headless）
+先编辑 assets/default_bvh_to_csv_converter_config.json 里的 import_folder / export_folder，再跑：
+
+python ./app/bvh_to_csv_converter.py \
+  --config ./assets/default_bvh_to_csv_converter_config.json \
+  --viewer null
+3) 单文件 + 自定义 BVH 骨骼（SFU/CMU 风格）
+仓库里已有的脚本：
+
+python ./scripts/retarget_sfu_bvh.py path/to/your.bvh \
+  -o path/to/output.csv \
+  --height 1.75
+--height 是演员身高（米），用于 human→robot 的整体缩放。
+
+ 

@@ -65,7 +65,7 @@ class Viewer:
 
         g1_builder = newton.ModelBuilder()
         g1_builder.add_mjcf(
-            newton.utils.download_asset("unitree_g1") / "mjcf/g1_29dof_rev_1_0.xml")
+            str(pipeline_utils.get_robot_mjcf_path("unitree_g1")))
         
         self.num_robots = 1
         self.robot_offsets = [wp.transform(wp.vec3(0.0, i - (self.num_robots - 1) / 2.0, 0.0), wp.quat_identity()) for i in range(self.num_robots)]
@@ -92,6 +92,19 @@ class Viewer:
         self.animation_buffers = []
         self.skeleton_instances = []
         self.robot_csv_animation_buffers = [None for _ in range(self.num_robots)]
+
+        # Optional auto-load of a default BVH file at startup so the user
+        # can hit "Retarget" immediately without using the file dialog.
+        default_bvh = self.config.get('default_bvh_file', None)
+        if default_bvh:
+            bvh_path = pathlib.Path(default_bvh)
+            if not bvh_path.is_absolute():
+                bvh_path = io_utils.get_project_root() / bvh_path
+            if bvh_path.exists():
+                print(f"[INFO]: Pre-loading default BVH: {bvh_path}")
+                self.load_bvh_file(str(bvh_path))
+            else:
+                print(f"[WARN]: default_bvh_file not found: {bvh_path}")
 
     def gui(self, ui):
         self.ui_playback_controls(ui)

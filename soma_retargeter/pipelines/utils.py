@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from enum import IntEnum, auto
+from pathlib import Path
 
 import soma_retargeter.utils.io_utils as io_utils
 import soma_retargeter.assets.usd as usd_utils
@@ -25,6 +26,54 @@ _TARGET_TYPE_TO_STR = {
     TargetType.UNITREE_G1 : "unitree_g1"
 }
 _STR_TO_TARGET_TYPE = {s : t for t, s in _TARGET_TYPE_TO_STR.items()}
+
+# Per-robot relative MJCF path under assets/robots/<robot_type>/ (and inside
+# Newton's downloadable asset bundle, which uses the same layout).
+_ROBOT_MJCF_RELATIVE_PATH = {
+    "unitree_g1": "mjcf/g1_29dof_rev_1_0.xml",
+}
+
+
+def get_robot_mjcf_path(robot_type: str) -> Path:
+    """Resolve the MJCF path for a robot.
+
+    Resolution order:
+        1. Local override under ``<project_root>/assets/robots/<robot_type>/...``.
+        2. Newton built-in asset via ``newton.utils.download_asset``.
+
+    Args:
+        robot_type: Robot type string (e.g. ``"unitree_g1"``).
+
+    Returns:
+        Filesystem path to the MJCF file.
+
+    Raises:
+        ValueError: If ``robot_type`` has no MJCF mapping registered.
+        FileNotFoundError: If neither the local override nor the Newton built-in
+            asset resolve to an existing file.
+    """
+    relative = _ROBOT_MJCF_RELATIVE_PATH.get(robot_type)
+    if relative is None:
+        allowed = ", ".join(_ROBOT_MJCF_RELATIVE_PATH.keys())
+        raise ValueError(
+            f"No MJCF mapping registered for robot type [{robot_type}]. "
+            f"Allowed values: {allowed}"
+        )
+
+    local_path = io_utils.get_robot_asset(robot_type, *relative.split("/"))
+    if local_path.exists():
+        print(f"[INFO]: Using local MJCF for [{robot_type}]: {local_path}")
+        return local_path
+
+    import newton
+    fallback = newton.utils.download_asset(robot_type) / relative
+    if not Path(fallback).exists():
+        raise FileNotFoundError(
+            f"[ERROR]: MJCF for robot [{robot_type}] not found locally at "
+            f"[{local_path}] nor in Newton built-in assets at [{fallback}]."
+        )
+    print(f"[INFO]: Using Newton built-in MJCF for [{robot_type}]: {fallback}")
+    return fallback
 
 
 def get_source_str_from_type(source: SourceType) -> str:

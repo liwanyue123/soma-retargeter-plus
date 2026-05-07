@@ -7,6 +7,7 @@ import newton
 import soma_retargeter.utils.newton_utils as newton_utils
 import soma_retargeter.animation.ik as ik_utils
 import soma_retargeter.utils.io_utils as io_utils
+import soma_retargeter.pipelines.utils as pipeline_utils
 
 _LIMB_DATA_IDX_NAME = 0
 _LIMB_DATA_IDX_EFFECTOR_INDICES = 1
@@ -31,7 +32,7 @@ class FeetStabilizer:
         if self.robot_type == 'unitree_g1':
             self.robot_builder = newton.ModelBuilder()
             self.robot_builder.add_mjcf(
-                newton.utils.download_asset("unitree_g1") / "mjcf/g1_29dof_rev_1_0.xml")
+                str(pipeline_utils.get_robot_mjcf_path("unitree_g1")))
 
             self.num_body_count = self.robot_builder.body_count
             self.ik_model = self._build_model(1)

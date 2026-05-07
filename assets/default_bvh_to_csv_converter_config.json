@@ -5,5 +5,6 @@
 	"retargeter": "Newton",
 	"retarget_source": "soma",
 	"retarget_target": "unitree_g1",
-	"retarget_source_facing_direction": "Mujoco"
+	"retarget_source_facing_direction": "Mujoco",
+	"default_bvh_file": "assets/motions/bvh/dance_hiphop_shuffle_square_R_fast_002__A318.bvh"
 }

@@ -72,7 +72,7 @@ class NewtonPipeline:
         if (self.target_type == pipeline_utils.TargetType.UNITREE_G1):
             self.robot_builder = newton.ModelBuilder()
             self.robot_builder.add_mjcf(
-                newton.utils.download_asset("unitree_g1") / "mjcf/g1_29dof_rev_1_0.xml")
+                str(pipeline_utils.get_robot_mjcf_path("unitree_g1")))
 
             self.human_robot_scaler = HumanToRobotScaler(
                 skeleton, retargeter_config['model_height'], io_utils.get_config_file(retargeter_config['human_robot_scaler_config']))

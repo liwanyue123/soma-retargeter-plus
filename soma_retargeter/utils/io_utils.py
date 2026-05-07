@@ -8,11 +8,17 @@ from typing import Union, Dict
 
 # Assumes this file is in soma_retargeter/utils
 _PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = _PACKAGE_ROOT.parent
 
 
 def get_package_root() -> Path:
     """Return the filesystem path to the package root."""
     return _PACKAGE_ROOT
+
+
+def get_project_root() -> Path:
+    """Return the filesystem path to the project (repository) root."""
+    return _PROJECT_ROOT
 
 
 def get_configs_dir() -> Path:
@@ -23,6 +29,16 @@ def get_configs_dir() -> Path:
 def get_config_file(*relative_parts: str) -> Path:
     """Return a path to a specific file under configs/."""
     return get_configs_dir().joinpath(*relative_parts)
+
+
+def get_robot_assets_dir() -> Path:
+    """Return the local robot assets directory under the project root."""
+    return get_project_root() / 'assets' / 'robots'
+
+
+def get_robot_asset(robot_type: str, *relative_parts: str) -> Path:
+    """Return a path to a file under ``assets/robots/<robot_type>/``."""
+    return get_robot_assets_dir().joinpath(robot_type, *relative_parts)
 
 
 def load_json(path: Union[str, Path]) -> Dict:
