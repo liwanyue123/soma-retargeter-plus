@@ -127,27 +127,13 @@ class Viewer:
         """
         self.calibration_mode = False
         self.show_soma_reference = False
-        self.soma_visual_scale = 1.0
-        # Pure-visual yaw of the SOMA reference. Default -90 deg cancels the
-        # apparent yaw mismatch between BVH-after-Mujoco-conversion and the
-        # robot's MJCF facing direction. Calibration math is independent of
-        # this value (see _do_compute_bias).
-        self.soma_visual_yaw_deg = -90.0
-        # Pure-visual X offset to place SOMA next to the robot.
-        self.soma_visual_offset_x = 0.8
 
         retargeter_cfg = pipeline_utils.get_retargeter_config(
             pipeline_utils.SourceType.SOMA,
             pipeline_utils.get_target_type_from_str(self.robot_type))
         self._calibration_retargeter_cfg = retargeter_cfg
 
-        # Default visual scale = robot height / human-height assumption,
-        # so the SOMA reference roughly matches the robot's stature.
         scaler_cfg_path = io_utils.get_config_file(retargeter_cfg['human_robot_scaler_config'])
-        scaler_cfg = io_utils.load_json(scaler_cfg_path)
-        human_h = scaler_cfg.get('human_height_assumption', 1.8)
-        robot_h = retargeter_cfg.get('model_height', 1.8)
-        self.soma_visual_scale = float(robot_h) / float(human_h)
         self._calibration_scaler_cfg_path = scaler_cfg_path
 
         init_bvh = io_utils.get_config_file(retargeter_cfg['initialization_pose'])
@@ -158,7 +144,6 @@ class Viewer:
             soma_skel, [0.6, 0.7, 1.0],
             self.converter.transform(wp.transform_identity()))
         self.soma_reference_instance.set_local_transforms(self.soma_reference_local_zero)
-        self._refresh_soma_reference_xform()
 
         self.soma_reference_mesh = pipeline_utils.get_source_model_mesh(
             pipeline_utils.SourceType.SOMA, soma_skel)
@@ -192,34 +177,58 @@ class Viewer:
 
         self._calibration_status = ""
         self._calibration_last_offsets = None
+        self._calibration_last_scales = None
 
     def _build_reference_pose(self):
         """Per-robot calibration reference pose.
 
-        Returns a dict with optional ``base_quat_xyzw`` (4 floats) and
-        ``angles`` (dict {joint_name: rad}). Joints not in ``angles`` default to 0.
+        Loaded from ``tools/<robot_type>_reference_pose.json`` if present, so
+        adding a new robot does not require touching this file - just drop a
+        reference-pose JSON in the right place.
 
-        Why a non-identity ``base_quat_xyzw`` for PM01: the SOMA BVH after the
-        Mujoco facing-conversion (Y-up -> Z-up rotation around X) ends up
-        facing world -Y, while PM01's MJCF default has its base facing world +X.
-        Calibrating with the robot also rotated -90 deg around Z bakes this
-        yaw alignment into every offset.q so motion delta from SOMA arrives in
-        the robot's correct facing direction (no crab walk).
+        The JSON schema (same one used by the CLI calibrator) has these keys:
+          * ``base_pos``         (3 floats, world-space base position)
+          * ``base_quat_xyzw``   (4 floats, base orientation; encode any yaw
+                                  alignment with SOMA here, e.g. -90 deg
+                                  around Z to face world -Y)
+          * ``joint_order``      (list of joint names)
+          * ``joint_angles_rad`` (list, same length as ``joint_order``)
+
+        Returns a dict::
+
+            { "base_pos": [...], "base_quat_xyzw": [...], "angles": {name: rad} }
+
+        Falls back to identity / zero angles if the file does not exist.
         """
-        if self.robot_type == "engineai_pm01":
-            return {
-                "base_quat_xyzw": [0.0, 0.0, -0.7071068, 0.7071068],
-                "angles": {
-                    "J16_ELBOW_PITCH_L": -1.3,
-                    "J21_ELBOW_PITCH_R": -1.3,
-                },
-            }
-        return {"base_quat_xyzw": None, "angles": {}}
+        repo_root = pathlib.Path(__file__).parent.parent
+        ref_path = repo_root / "tools" / f"{self.robot_type}_reference_pose.json"
+        if not ref_path.exists():
+            print(f"[INFO]: No reference pose JSON for [{self.robot_type}] at {ref_path}. "
+                  "Calibration will use identity base + zero joint angles.")
+            return {"base_pos": None, "base_quat_xyzw": None, "angles": {}}
+
+        ref = json.loads(ref_path.read_text())
+        order = ref.get("joint_order", [])
+        rads = ref.get("joint_angles_rad", [])
+        angles = {}
+        if len(order) == len(rads):
+            angles = {nm: float(a) for nm, a in zip(order, rads)}
+        else:
+            print(f"[WARN]: Reference pose [{ref_path.name}] has joint_order "
+                  f"({len(order)}) and joint_angles_rad ({len(rads)}) mismatch.")
+
+        return {
+            "base_pos": ref.get("base_pos"),
+            "base_quat_xyzw": ref.get("base_quat_xyzw"),
+            "angles": angles,
+        }
 
     def reset_calibration_pose_to_reference(self):
         """Reset ``self.calibration_joint_q`` to the per-robot reference pose."""
         self.calibration_joint_q = self.robot_default_joint_q_values.astype(np.float32).copy()
         ref = self._calibration_reference
+        if ref.get("base_pos"):
+            self.calibration_joint_q[0:3] = ref["base_pos"]
         if ref.get("base_quat_xyzw"):
             self.calibration_joint_q[3:7] = ref["base_quat_xyzw"]
         ref_angles = ref.get("angles", {})
@@ -232,24 +241,6 @@ class Viewer:
         self.calibration_joint_q[3:7] = [0.0, 0.0, 0.0, 1.0]
         for j in self.calibration_revolute_joints:
             self.calibration_joint_q[j["q_idx"]] = 0.0
-
-    def _refresh_soma_reference_xform(self):
-        """Apply the current visual scale, yaw and X-offset to the SOMA
-        reference instance. This is purely cosmetic - the math used by
-        :meth:`_do_compute_bias` always uses the unmodified converter."""
-        scaled = self.soma_reference_local_zero.copy()
-        scaled[:, 0:3] *= self.soma_visual_scale
-        self.soma_reference_instance.set_local_transforms(scaled)
-
-        base = self.converter.transform(wp.transform_identity())
-        yaw_q = wp.quat_from_axis_angle(
-            wp.vec3(0.0, 0.0, 1.0), wp.radians(float(self.soma_visual_yaw_deg)))
-        new_q = wp.mul(yaw_q, wp.quat(*base.q))
-        new_p = wp.vec3(
-            base.p[0] + float(self.soma_visual_offset_x),
-            base.p[1],
-            base.p[2])
-        self.soma_reference_instance.xform = wp.transform(new_p, new_q)
 
     def gui(self, ui):
         self.ui_playback_controls(ui)
@@ -559,53 +550,10 @@ class Viewer:
             return
 
         ui.separator()
-        if ui.collapsing_header("SOMA Reference Pose",
-                                flags=ui.TreeNodeFlags_.default_open):
-            ref_changed, self.show_soma_reference = ui.checkbox(
-                "Show SOMA Zero Pose", self.show_soma_reference)
-            if ref_changed and not self.show_soma_reference:
-                self.soma_reference_mesh_renderer.clear(self.viewer)
-
-            ui.set_next_item_width(180)
-            scale_changed, new_scale = ui.slider_float(
-                "Visual scale##soma", self.soma_visual_scale, 0.3, 1.5, "%.3f")
-            if scale_changed:
-                self.soma_visual_scale = new_scale
-                self._refresh_soma_reference_xform()
-            ui.same_line()
-            if ui.button("Auto##soma_scale"):
-                cfg = self._calibration_retargeter_cfg
-                scaler = io_utils.load_json(self._calibration_scaler_cfg_path)
-                self.soma_visual_scale = float(
-                    cfg.get('model_height', 1.8)) / float(
-                    scaler.get('human_height_assumption', 1.8))
-                self._refresh_soma_reference_xform()
-
-            ui.set_next_item_width(180)
-            yaw_changed, new_yaw = ui.slider_float(
-                "Visual yaw (deg)##soma",
-                self.soma_visual_yaw_deg, -180.0, 180.0, "%.1f")
-            if yaw_changed:
-                self.soma_visual_yaw_deg = new_yaw
-                self._refresh_soma_reference_xform()
-            ui.same_line()
-            if ui.button("Auto -90##soma_yaw"):
-                self.soma_visual_yaw_deg = -90.0
-                self._refresh_soma_reference_xform()
-
-            ui.set_next_item_width(180)
-            offx_changed, new_offx = ui.slider_float(
-                "Visual offset X (m)##soma",
-                self.soma_visual_offset_x, -2.0, 2.0, "%.2f")
-            if offx_changed:
-                self.soma_visual_offset_x = new_offx
-                self._refresh_soma_reference_xform()
-            ui.same_line()
-            if ui.button("0##soma_offx"):
-                self.soma_visual_offset_x = 0.0
-                self._refresh_soma_reference_xform()
-
-            ui.text_disabled("(visual only - calibration math is unaffected)")
+        ref_changed, self.show_soma_reference = ui.checkbox(
+            "Show SOMA Zero Pose Overlay", self.show_soma_reference)
+        if ref_changed and not self.show_soma_reference:
+            self.soma_reference_mesh_renderer.clear(self.viewer)
 
         ui.separator()
         if ui.collapsing_header("Robot Joint Sliders",
@@ -652,32 +600,58 @@ class Viewer:
             ui.end_child()
 
         ui.separator()
-        if ui.collapsing_header("Compute Bias",
+        if ui.collapsing_header("Compute joint_scales",
+                                flags=ui.TreeNodeFlags_.default_open):
+            ui.text_wrapped(
+                "Per-joint magnitude scales |robot_vec| / |soma_vec|, derived "
+                "from the matching reference poses above. Run this whenever "
+                "you change robots, the reference pose, or model_height.")
+            if ui.button("Compute Scales"):
+                self._do_compute_scales()
+            ui.same_line()
+            if not self._calibration_last_scales:
+                ui.begin_disabled()
+            if ui.button("Write scales to Config"):
+                self._do_write_scales()
+            ui.same_line()
+            if ui.button("Print scales##s"):
+                print(json.dumps(self._calibration_last_scales, indent=4))
+            if not self._calibration_last_scales:
+                ui.end_disabled()
+
+            if self._calibration_last_scales:
+                ui.spacing()
+                if ui.begin_child("##scales_preview", ui.ImVec2(0, 120)):
+                    for k, v in self._calibration_last_scales.items():
+                        ui.text(f"{k:14s}  {v:.4f}")
+                ui.end_child()
+
+        ui.separator()
+        if ui.collapsing_header("Compute joint_offsets",
                                 flags=ui.TreeNodeFlags_.default_open):
             ui.text(f"ik_map entries: {len(self._calibration_retargeter_cfg.get('ik_map', {}))}")
+            ui.text_wrapped(
+                "offset.q always recomputes (corrects coordinate-frame "
+                "mismatch). offset.p is left at its hand-tuned value unless "
+                "you tick the box below; ticking it recomputes the residual "
+                "AFTER scaling, so make sure joint_scales is up to date.")
             _, self._calc_position = ui.checkbox(
-                "Also compute offset.p (geometric)",
+                "Also overwrite offset.p (residual after scaling)",
                 getattr(self, "_calc_position", False))
 
-            if ui.button("Compute"):
+            if ui.button("Compute Offsets"):
                 self._do_compute_bias()
             ui.same_line()
             if self._calibration_last_offsets is None:
                 ui.begin_disabled()
-            if ui.button("Write to Config"):
+            if ui.button("Write offsets to Config"):
                 self._do_write_offsets()
-            if self._calibration_last_offsets is None:
-                ui.end_disabled()
             ui.same_line()
-            if self._calibration_last_offsets is None:
-                ui.begin_disabled()
-            if ui.button("Print to Console"):
+            if ui.button("Print offsets##o"):
                 print(json.dumps(self._calibration_last_offsets, indent=4))
             if self._calibration_last_offsets is None:
                 ui.end_disabled()
 
-            if self._calibration_status:
-                ui.text_wrapped(self._calibration_status)
             if self._calibration_last_offsets is not None:
                 ui.spacing()
                 ui.text("Computed offset.q (xyzw) per SOMA joint:")
@@ -688,6 +662,10 @@ class Viewer:
                             f"{soma_joint:14s}  "
                             f"({q[0]:+.3f}, {q[1]:+.3f}, {q[2]:+.3f}, {q[3]:+.3f})")
                 ui.end_child()
+
+        if self._calibration_status:
+            ui.separator()
+            ui.text_wrapped(self._calibration_status)
 
         ui.end()
 
@@ -730,17 +708,47 @@ class Viewer:
         self._calibration_status = f"Loaded pose from {path}"
         print(f"[INFO]: {self._calibration_status}")
 
-    def _do_compute_bias(self):
-        """Compute joint_offsets from current SOMA zero pose + robot pose."""
-        ik_map = self._calibration_retargeter_cfg.get('ik_map', {})
+    def _calibration_height_ratio(self):
+        cfg = self._calibration_retargeter_cfg
+        scaler = io_utils.load_json(self._calibration_scaler_cfg_path)
+        return float(cfg.get('model_height', 1.8)) / float(
+            scaler.get('human_height_assumption', 1.8))
 
+    def _calibration_collect(self):
+        """Snapshot SOMA zero-pose and current robot pose for calibration."""
         soma_globals = self.soma_reference_skeleton.compute_global_transforms(
             self.soma_reference_local_zero,
             self.converter.transform(wp.transform_identity()))
-
         body_q = self.state.body_q.numpy()
         link_globals = calibration_utils.collect_robot_link_globals(
             self.robot_builder, body_q)
+        return soma_globals, link_globals
+
+    def _do_compute_scales(self):
+        """Compute joint_scales from the current matching reference poses."""
+        ik_map = self._calibration_retargeter_cfg.get('ik_map', {})
+        soma_globals, link_globals = self._calibration_collect()
+        new_scales = calibration_utils.compute_scales(
+            soma_globals,
+            self.soma_reference_skeleton.joint_names,
+            link_globals,
+            ik_map,
+            height_ratio=self._calibration_height_ratio())
+        self._calibration_last_scales = new_scales
+        self._calibration_status = (
+            f"Computed {len(new_scales)} joint_scales. "
+            "Click 'Write scales to Config' to persist.")
+        print(f"[INFO]: {self._calibration_status}")
+
+    def _do_compute_bias(self):
+        """Compute joint_offsets from current SOMA zero pose + robot pose."""
+        ik_map = self._calibration_retargeter_cfg.get('ik_map', {})
+        soma_globals, link_globals = self._calibration_collect()
+
+        # Use the latest in-memory scales if the user just computed them,
+        # otherwise fall back to whatever is currently saved in the config.
+        scaler = io_utils.load_json(self._calibration_scaler_cfg_path)
+        scales = getattr(self, "_calibration_last_scales", None) or scaler.get('joint_scales', {})
 
         compute_pos = bool(getattr(self, "_calc_position", False))
         new_offsets = calibration_utils.compute_offsets(
@@ -748,12 +756,14 @@ class Viewer:
             self.soma_reference_skeleton.joint_names,
             link_globals,
             ik_map,
-            compute_position=compute_pos)
+            compute_position=compute_pos,
+            joint_scales=scales,
+            height_ratio=self._calibration_height_ratio())
 
         self._calibration_last_offsets = new_offsets
         self._calibration_status = (
             f"Computed {len(new_offsets)} offsets. "
-            f"Position: {'computed' if compute_pos else 'kept (existing)'}")
+            f"Position: {'computed (residual)' if compute_pos else 'kept (existing)'}")
         print(f"[INFO]: {self._calibration_status}")
 
     def _do_write_offsets(self):
@@ -767,6 +777,17 @@ class Viewer:
             keep_existing_position=keep_pos)
         calibration_utils.write_scaler_config(scaler_cfg, path)
         self._calibration_status = f"Wrote offsets to {path}"
+        print(f"[INFO]: {self._calibration_status}")
+
+    def _do_write_scales(self):
+        if not getattr(self, "_calibration_last_scales", None):
+            return
+        path = self._calibration_scaler_cfg_path
+        scaler_cfg = io_utils.load_json(path)
+        calibration_utils.merge_scales_into_config(
+            scaler_cfg, self._calibration_last_scales)
+        calibration_utils.write_scaler_config(scaler_cfg, path)
+        self._calibration_status = f"Wrote joint_scales to {path}"
         print(f"[INFO]: {self._calibration_status}")
 
     def ui_playback_controls(self, ui):

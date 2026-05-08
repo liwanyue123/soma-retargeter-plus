@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """
-Calibrate the per-joint ``joint_offsets`` block of a robot scaler config.
+Calibrate ``joint_offsets`` and/or ``joint_scales`` of a robot scaler config.
 
 Given:
   - SOMA's zero-pose BVH (already in repo)
   - The robot's MJCF
-  - The robot's reference joint angles (a pose that physically matches the SOMA
-    zero pose)
+  - The robot's reference joint angles (a pose that physically matches the
+    SOMA zero pose), stored in ``tools/<robot>_reference_pose.json``
 
-The actual math lives in :mod:`soma_retargeter.robotics.calibration`. This
-script is a thin CLI wrapper around it.
+The math lives in :mod:`soma_retargeter.robotics.calibration`. This script is
+a thin CLI wrapper.
 
-Usage:
-    python tools/calibrate_robot_offsets.py engineai_pm01 [--write] [--keep-pos] [--calc-pos]
+Recipes:
 
-The reference pose is taken from a "<robot>_reference_pose.json" file under
-this directory, e.g. ``tools/engineai_pm01_reference_pose.json``. Edit that
-file to change the calibration pose.
+  # Print computed offsets (q only) - safe, no writes:
+  python tools/calibrate_robot_offsets.py engineai_pm01
+
+  # Update offset.q and joint_scales together (recommended for new robots):
+  python tools/calibrate_robot_offsets.py engineai_pm01 --write --scales
+
+  # Also recompute offset.p as the residual after scaling
+  # (only meaningful when scales are also up-to-date):
+  python tools/calibrate_robot_offsets.py engineai_pm01 --write --scales --calc-pos
 """
 
 from __future__ import annotations
@@ -85,18 +90,27 @@ def main():
     parser.add_argument(
         "--write",
         action="store_true",
-        help="If set, write the new joint_offsets back into the scaler config.")
+        help="If set, write the new joint_offsets / joint_scales back into "
+             "the scaler config.")
+    parser.add_argument(
+        "--scales",
+        action="store_true",
+        help="If set, also (re)compute joint_scales from the geometry of the "
+             "matching reference poses (|robot_vec| / |soma_vec| per joint).")
     parser.add_argument(
         "--calc-pos",
         action="store_true",
-        help="If set, also compute offset.p from the geometric difference. "
-             "Default: 0,0,0 (and merge with existing hand-tuned values via --keep-pos).")
+        help="If set, also compute offset.p as the residual after scaling. "
+             "Use with --scales for sane values. Without --scales the "
+             "residual is computed against unscaled SOMA, which can produce "
+             "decimeter-level offsets and make the robot squat / drift.")
     parser.add_argument(
         "--keep-pos",
         action="store_true",
         default=True,
         help="If set (default), preserve existing offset.p values from the "
-             "scaler config and only overwrite offset.q.")
+             "scaler config and only overwrite offset.q. Ignored when "
+             "--calc-pos is set.")
     parser.add_argument(
         "--no-keep-pos",
         dest="keep_pos",
@@ -117,26 +131,49 @@ def main():
     scaler_cfg = io_utils.load_json(scaler_cfg_path)
     ik_map = retargeter_cfg['ik_map']
 
+    height_ratio = float(retargeter_cfg.get('model_height', 1.8)) / float(
+        scaler_cfg.get('human_height_assumption', 1.8))
+
     soma_skel, soma_globals = _load_soma_zero_globals(
         retargeter_cfg, facing_direction="Mujoco")
     robot_link_globals = _load_robot_globals(
         args.robot_type, json.loads(ref_path.read_text()))
+
+    new_scales = None
+    if args.scales:
+        new_scales = calibration.compute_scales(
+            soma_globals,
+            soma_skel.joint_names,
+            robot_link_globals,
+            ik_map,
+            height_ratio=height_ratio)
+        print("\n=== Computed joint_scales (config values) ===")
+        print(json.dumps(new_scales, indent=4))
+
+    # When computing offset.p we want the *new* scales (if computed in this
+    # run) so the residual subtracts the right scaled SOMA position.
+    scales_for_offset = new_scales if new_scales is not None else scaler_cfg.get('joint_scales', {})
 
     new_offsets = calibration.compute_offsets(
         soma_globals,
         soma_skel.joint_names,
         robot_link_globals,
         ik_map,
-        compute_position=args.calc_pos)
+        compute_position=args.calc_pos,
+        joint_scales=scales_for_offset,
+        height_ratio=height_ratio)
 
     print("\n=== Computed joint_offsets block ===")
     print(json.dumps(new_offsets, indent=4))
 
     if args.write:
+        if new_scales is not None:
+            calibration.merge_scales_into_config(scaler_cfg, new_scales)
         calibration.merge_offsets_into_config(
-            scaler_cfg, new_offsets, keep_existing_position=args.keep_pos)
+            scaler_cfg, new_offsets,
+            keep_existing_position=(args.keep_pos and not args.calc_pos))
         calibration.write_scaler_config(scaler_cfg, scaler_cfg_path)
-        print(f"\n[INFO]: Wrote new joint_offsets to {scaler_cfg_path}")
+        print(f"\n[INFO]: Wrote scaler config to {scaler_cfg_path}")
     else:
         print("\n[INFO]: Pass --write to update the scaler config in place.")
 
