@@ -1,0 +1,29 @@
+{
+    "robot_type": "engineai_pm01",
+    "ik_iterations": 20,
+    "joint_limit_weight": 10.0,
+
+    "effectors": {
+        "LINK_BASE"          : [30.0,  8.0],
+        "LINK_HIP_ROLL_L"    : [1.5 , 0.15],
+        "LINK_KNEE_PITCH_L"  : [1.0 ,  1.0],
+        "LINK_ANKLE_ROLL_L"  : [10.0,  2.0],
+        "LINK_HIP_ROLL_R"    : [1.5 , 0.15],
+        "LINK_KNEE_PITCH_R"  : [1.0 ,  1.0],
+        "LINK_ANKLE_ROLL_R"  : [10.0,  2.0]
+    },
+
+    "ik_root": 0,
+    "ik_limbs": {
+        "left_leg": {
+            "effectors": [1, 2, 3],
+            "hint_reference": 3,
+            "hint_offset": [0.25, 0.0, 0.25]
+        },
+        "right_leg": {
+            "effectors": [4, 5, 6],
+            "hint_reference": 6,
+            "hint_offset": [0.25, 0.0, 0.25]
+        }
+    }
+}

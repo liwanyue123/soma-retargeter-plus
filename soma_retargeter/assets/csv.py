@@ -83,6 +83,94 @@ class UnitreeG129DOF_CSVConfig:
         return row
 
 
+@dataclass
+class EngineAIPM01_CSVConfig:
+    name: str = "engineai_pm01_24dof"
+    csv_header: ClassVar[List[str]] = [
+        "Frame",
+        "root_translateX", "root_translateY", "root_translateZ",
+        "root_rotateX", "root_rotateY", "root_rotateZ",
+        "J00_HIP_PITCH_L", "J01_HIP_ROLL_L", "J02_HIP_YAW_L",
+        "J03_KNEE_PITCH_L", "J04_ANKLE_PITCH_L", "J05_ANKLE_ROLL_L",
+        "J06_HIP_PITCH_R", "J07_HIP_ROLL_R", "J08_HIP_YAW_R",
+        "J09_KNEE_PITCH_R", "J10_ANKLE_PITCH_R", "J11_ANKLE_ROLL_R",
+        "J12_WAIST_YAW",
+        "J13_SHOULDER_PITCH_L", "J14_SHOULDER_ROLL_L", "J15_SHOULDER_YAW_L",
+        "J16_ELBOW_PITCH_L", "J17_ELBOW_YAW_L",
+        "J18_SHOULDER_PITCH_R", "J19_SHOULDER_ROLL_R", "J20_SHOULDER_YAW_R",
+        "J21_ELBOW_PITCH_R", "J22_ELBOW_YAW_R",
+        "J23_HEAD_YAW"]
+
+    def to_anim_frame(self, csv_row: np.ndarray) -> np.ndarray:
+        """
+        Convert one CSV row (including frame index) into one anim buffer frame.
+        """
+        # csv_row layout: [frame index, tx, ty, tz, rx, ry, rz, dof0, ...]
+        num_joint_dofs = csv_row.shape[0] - 1 # Remove frame index
+        anim_row = np.zeros(
+            num_joint_dofs + 1, # euler rotate xyz values converted to quat
+            dtype=np.float32)
+
+        # translation (cm -> m)
+        anim_row[0:3] = csv_row[1:4] * 0.01
+
+        # rotation (euler deg -> quat)
+        euler = np.deg2rad(csv_row[4:7])
+        quat = wp.quat_rpy(euler[0], euler[1], euler[2])
+        anim_row[3:7] = quat
+
+        # remaining joints (deg -> rad)
+        anim_row[7:] = np.deg2rad(csv_row[7:])
+
+        return anim_row
+
+    def to_csv_row(self, frame_idx: int, anim_row: np.ndarray) -> List[float]:
+        """
+        Convert one anim buffer row into a CSV row with this config's layout.
+        """
+        # translation (m -> cm)
+        t = wp.vec3(*anim_row[0:3]) * 100.0
+        # root rotation (quat -> euler deg)
+        q = wp.quat(*anim_row[3:7])
+        euler = R.from_quat([q[0], q[1], q[2], q[3]]).as_euler("xyz", degrees=True)
+
+        row = [frame_idx, t[0], t[1], t[2], euler[0], euler[1], euler[2]]
+
+        # joints (rad -> deg)
+        row.extend(np.rad2deg(anim_row[7:]))
+
+        return row
+
+
+_ROBOT_CSV_CONFIGS = {
+    "unitree_g1": UnitreeG129DOF_CSVConfig,
+    "engineai_pm01": EngineAIPM01_CSVConfig,
+}
+
+
+def get_csv_config_for_robot(robot_type: str) -> RobotCSVConfig:
+    """
+    Resolve the CSV layout config for a given robot type.
+
+    Args:
+        robot_type: Robot type string (e.g. ``"unitree_g1"``).
+
+    Returns:
+        Instantiated CSV config.
+
+    Raises:
+        ValueError: If no CSV config is registered for ``robot_type``.
+    """
+    cls = _ROBOT_CSV_CONFIGS.get(robot_type)
+    if cls is None:
+        allowed = ", ".join(_ROBOT_CSV_CONFIGS.keys())
+        raise ValueError(
+            f"No CSV config registered for robot type [{robot_type}]. "
+            f"Allowed values: {allowed}"
+        )
+    return cls()
+
+
 def load_csv(file_path: str, fps: float = 120.0, csv_config: RobotCSVConfig = UnitreeG129DOF_CSVConfig()) -> CSVAnimationBuffer:
     """
     Load a robot motion CSV file into a ``CSVAnimationBuffer``.

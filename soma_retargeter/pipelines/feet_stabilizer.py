@@ -29,28 +29,28 @@ class FeetStabilizer:
         """
         self._load_config(config)
 
-        if self.robot_type == 'unitree_g1':
-            self.robot_builder = newton.ModelBuilder()
-            self.robot_builder.add_mjcf(
-                str(pipeline_utils.get_robot_mjcf_path("unitree_g1")))
+        # Validate robot_type via the central registry; raises ValueError if unknown
+        pipeline_utils.get_target_type_from_str(self.robot_type)
 
-            self.num_body_count = self.robot_builder.body_count
-            self.ik_model = self._build_model(1)
+        self.robot_builder = newton.ModelBuilder()
+        self.robot_builder.add_mjcf(
+            str(pipeline_utils.get_robot_mjcf_path(self.robot_type)))
 
-            body_names = [newton_utils.get_name_from_label(label) for label in self.robot_builder.body_label]
-            self.effector_mapped_indices = [body_names.index(body_name) for (body_name, _) in self.effectors.items()]
-            self.effector_weights = [wp.vec2(*tr_weights) for (_, tr_weights) in self.effectors.items()]
-            effector_parent_indices = [self.robot_builder.joint_parent[idx] for idx in self.effector_mapped_indices]
+        self.num_body_count = self.robot_builder.body_count
+        self.ik_model = self._build_model(1)
 
-            self.pelvis_idx = self.effector_mapped_indices[self.ik_root]
-            self.two_bone_ik_chains = wp.array2d([[self.effector_mapped_indices[i] for i in limb[_LIMB_DATA_IDX_EFFECTOR_INDICES]] for limb in self.ik_limb_data], dtype=wp.int32)
-            self.two_bone_ik_chain_parent = wp.array([effector_parent_indices[limb[_LIMB_DATA_IDX_EFFECTOR_INDICES][0]] for limb in self.ik_limb_data], dtype=wp.int32)
-            self.two_bone_ik_hint_references = wp.array([self.effector_mapped_indices[limb[_LIMB_DATA_IDX_HINT_REF]] for limb in self.ik_limb_data], dtype=wp.int32)
-            self.two_bone_ik_hint_offsets = wp.array([limb[_LIMB_DATA_IDX_HINT_OFFSET] for limb in self.ik_limb_data], dtype=wp.vec3)
+        body_names = [newton_utils.get_name_from_label(label) for label in self.robot_builder.body_label]
+        self.effector_mapped_indices = [body_names.index(body_name) for (body_name, _) in self.effectors.items()]
+        self.effector_weights = [wp.vec2(*tr_weights) for (_, tr_weights) in self.effectors.items()]
+        effector_parent_indices = [self.robot_builder.joint_parent[idx] for idx in self.effector_mapped_indices]
 
-            self.num_envs = -1
-        else:
-            raise ValueError(f"[ERROR]: Unknown robot type {self.robot_type}")
+        self.pelvis_idx = self.effector_mapped_indices[self.ik_root]
+        self.two_bone_ik_chains = wp.array2d([[self.effector_mapped_indices[i] for i in limb[_LIMB_DATA_IDX_EFFECTOR_INDICES]] for limb in self.ik_limb_data], dtype=wp.int32)
+        self.two_bone_ik_chain_parent = wp.array([effector_parent_indices[limb[_LIMB_DATA_IDX_EFFECTOR_INDICES][0]] for limb in self.ik_limb_data], dtype=wp.int32)
+        self.two_bone_ik_hint_references = wp.array([self.effector_mapped_indices[limb[_LIMB_DATA_IDX_HINT_REF]] for limb in self.ik_limb_data], dtype=wp.int32)
+        self.two_bone_ik_hint_offsets = wp.array([limb[_LIMB_DATA_IDX_HINT_OFFSET] for limb in self.ik_limb_data], dtype=wp.vec3)
+
+        self.num_envs = -1
 
     def setup_num_envs(self, num_envs):
         """

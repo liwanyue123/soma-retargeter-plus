@@ -1,0 +1,10 @@
+{
+	"import_folder": "assets/motions/bvh",
+	"export_folder": "assets/motions/test-export-pm01",
+	"batch_size": 100,
+	"retargeter": "Newton",
+	"retarget_source": "soma",
+	"retarget_target": "engineai_pm01",
+	"retarget_source_facing_direction": "Mujoco",
+	"default_bvh_file": "assets/motions/bvh/dance_hiphop_shuffle_square_R_fast_002__A318.bvh"
+}
