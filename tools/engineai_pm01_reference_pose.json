@@ -1,0 +1,25 @@
+{
+    "_comment": "PM01 reference pose: matches SOMA zero pose (arms hanging, forearms bent ~75 deg forward at the elbow). The base_quat encodes a -90 deg rotation around world Z so PM01 faces -Y, matching SOMA's facing direction after the Mujoco facing-conversion (Y-up -> Z-up). This bakes the yaw alignment into all offset.q values so the robot doesn't crab-walk.",
+    "base_pos":  [0.0, 0.0, 0.82],
+    "base_quat_xyzw": [0.0, 0.0, -0.7071068, 0.7071068],
+    "joint_order": [
+        "J00_HIP_PITCH_L", "J01_HIP_ROLL_L", "J02_HIP_YAW_L",
+        "J03_KNEE_PITCH_L", "J04_ANKLE_PITCH_L", "J05_ANKLE_ROLL_L",
+        "J06_HIP_PITCH_R", "J07_HIP_ROLL_R", "J08_HIP_YAW_R",
+        "J09_KNEE_PITCH_R", "J10_ANKLE_PITCH_R", "J11_ANKLE_ROLL_R",
+        "J12_WAIST_YAW",
+        "J13_SHOULDER_PITCH_L", "J14_SHOULDER_ROLL_L", "J15_SHOULDER_YAW_L",
+        "J16_ELBOW_PITCH_L", "J17_ELBOW_YAW_L",
+        "J18_SHOULDER_PITCH_R", "J19_SHOULDER_ROLL_R", "J20_SHOULDER_YAW_R",
+        "J21_ELBOW_PITCH_R", "J22_ELBOW_YAW_R",
+        "J23_HEAD_YAW"
+    ],
+    "joint_angles_rad": [
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0,
+        0.0, 0.0, 0.0, -1.3, 0.0,
+        0.0, 0.0, 0.0, -1.3, 0.0,
+        0.0
+    ]
+}
