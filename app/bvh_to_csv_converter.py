@@ -54,7 +54,12 @@ class Viewer:
         self.playback_total_time = 0.0
 
         self.retarget_source_options = ['soma']
-        self.retarget_target_options = ['unitree_g1', 'engineai_pm01']
+        self.retarget_target_options = [
+            'unitree_g1',
+            'engineai_pm01',
+            'hightorque_pi_plus',
+            'pndbotics_adam_lite',
+        ]
         self.retarget_solver_options = ['Newton']
         self.retarget_solver_idx     = 0
         self.retarget_source_idx     = 0

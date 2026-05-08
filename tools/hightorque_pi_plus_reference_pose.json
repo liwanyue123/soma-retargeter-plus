@@ -1,0 +1,21 @@
+{
+    "_comment": "HighTorque pi_plus reference pose: starting point matching SOMA zero pose. Adjust 'base_quat_xyzw' and joint angles in the GUI calibration panel to dial in correct alignment, then save back to this file via the 'Save Pose...' button.",
+    "base_pos":  [0.0, 0.0, 0.39],
+    "base_quat_xyzw": [0.0, 0.0, -0.7071068, 0.7071068],
+    "joint_order": [
+        "l_hip_pitch_joint", "l_hip_roll_joint", "l_thigh_joint",
+        "l_calf_joint", "l_ankle_pitch_joint", "l_ankle_roll_joint",
+        "l_shoulder_pitch_joint", "l_shoulder_roll_joint",
+        "l_upper_arm_joint", "l_elbow_joint",
+        "r_hip_pitch_joint", "r_hip_roll_joint", "r_thigh_joint",
+        "r_calf_joint", "r_ankle_pitch_joint", "r_ankle_roll_joint",
+        "r_shoulder_pitch_joint", "r_shoulder_roll_joint",
+        "r_upper_arm_joint", "r_elbow_joint"
+    ],
+    "joint_angles_rad": [
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, -1.5708,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, -1.5708
+    ]
+}

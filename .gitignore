@@ -14,3 +14,8 @@ wheels/
 
 # Log files, settings
 imgui.ini
+
+# Local retargeting test outputs (CSV) - regenerated on demand and would
+# otherwise bloat git LFS storage on every commit.
+assets/motions/test-export*/
+/tmp/

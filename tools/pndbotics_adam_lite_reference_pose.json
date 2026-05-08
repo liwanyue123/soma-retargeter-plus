@@ -1,0 +1,23 @@
+{
+    "_comment": "PNDbotics adam_lite reference pose: starting point matching SOMA zero pose. Adjust 'base_quat_xyzw' and joint angles in the GUI calibration panel to dial in correct alignment, then save back to this file via the 'Save Pose...' button.",
+    "base_pos":  [0.0, 0.0, 0.93],
+    "base_quat_xyzw": [0.0, 0.0, -0.7071068, 0.7071068],
+    "joint_order": [
+        "hipPitch_Left", "hipRoll_Left", "hipYaw_Left",
+        "kneePitch_Left", "anklePitch_Left", "ankleRoll_Left",
+        "hipPitch_Right", "hipRoll_Right", "hipYaw_Right",
+        "kneePitch_Right", "anklePitch_Right", "ankleRoll_Right",
+        "waistRoll", "waistPitch", "waistYaw",
+        "shoulderPitch_Left", "shoulderRoll_Left", "shoulderYaw_Left",
+        "elbow_Left", "wristYaw_Left",
+        "shoulderPitch_Right", "shoulderRoll_Right", "shoulderYaw_Right",
+        "elbow_Right", "wristYaw_Right"
+    ],
+    "joint_angles_rad": [
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, -1.5708, 0.0,
+        0.0, 0.0, 0.0, -1.5708, 0.0
+    ]
+}

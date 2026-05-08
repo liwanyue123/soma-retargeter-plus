@@ -17,6 +17,8 @@ class TargetType(IntEnum):
     """Enumeration of supported target model types."""
     UNITREE_G1 = auto()
     ENGINEAI_PM01 = auto()
+    HIGHTORQUE_PI_PLUS = auto()
+    PNDBOTICS_ADAM_LITE = auto()
 
 _SOURCE_TYPE_TO_STR = {
     SourceType.SOMA : "soma"
@@ -24,16 +26,29 @@ _SOURCE_TYPE_TO_STR = {
 _STR_TO_SOURCE_TYPE = {s : t for t, s in _SOURCE_TYPE_TO_STR.items()}
 
 _TARGET_TYPE_TO_STR = {
-    TargetType.UNITREE_G1 : "unitree_g1",
-    TargetType.ENGINEAI_PM01 : "engineai_pm01",
+    TargetType.UNITREE_G1          : "unitree_g1",
+    TargetType.ENGINEAI_PM01       : "engineai_pm01",
+    TargetType.HIGHTORQUE_PI_PLUS  : "hightorque_pi_plus",
+    TargetType.PNDBOTICS_ADAM_LITE : "pndbotics_adam_lite",
 }
 _STR_TO_TARGET_TYPE = {s : t for t, s in _TARGET_TYPE_TO_STR.items()}
 
 # Per-robot relative MJCF path under assets/robots/<robot_type>/ (and inside
 # Newton's downloadable asset bundle, which uses the same layout).
 _ROBOT_MJCF_RELATIVE_PATH = {
-    "unitree_g1": "mjcf/g1_29dof_rev_1_0.xml",
-    "engineai_pm01": "pm.xml",
+    "unitree_g1":          "mjcf/g1_29dof_rev_1_0.xml",
+    "engineai_pm01":       "pm.xml",
+    "hightorque_pi_plus":  "pi_plus_24dof.xml",
+    "pndbotics_adam_lite": "adam_lite.xml",
+}
+
+# Per-robot retargeter config filename under
+# soma_retargeter/configs/<robot_type>/.
+_RETARGETER_CONFIG_FILENAME = {
+    (SourceType.SOMA, "unitree_g1"):          "soma_to_g1_retargeter_config.json",
+    (SourceType.SOMA, "engineai_pm01"):       "soma_to_pm01_retargeter_config.json",
+    (SourceType.SOMA, "hightorque_pi_plus"):  "soma_to_pi_plus_retargeter_config.json",
+    (SourceType.SOMA, "pndbotics_adam_lite"): "soma_to_adam_lite_retargeter_config.json",
 }
 
 
@@ -183,20 +198,15 @@ def get_retargeter_config(source: SourceType, target: TargetType) -> dict:
     Raises:
         ValueError: If the source or target type is not supported.
     """
-    if target == TargetType.UNITREE_G1:
-        config_dir = 'unitree_g1'
-        if source == SourceType.SOMA:
-            filename = 'soma_to_g1_retargeter_config.json'
-        else:
-            raise ValueError(f"Unknown source type [{source}] for target [{target}].")
-    elif target == TargetType.ENGINEAI_PM01:
-        config_dir = 'engineai_pm01'
-        if source == SourceType.SOMA:
-            filename = 'soma_to_pm01_retargeter_config.json'
-        else:
-            raise ValueError(f"Unknown source type [{source}] for target [{target}].")
-    else:
+    config_dir = _TARGET_TYPE_TO_STR.get(target)
+    if config_dir is None:
         raise ValueError(f"Unknown target type [{target}].")
+
+    filename = _RETARGETER_CONFIG_FILENAME.get((source, config_dir))
+    if filename is None:
+        raise ValueError(
+            f"No retargeter config registered for source=[{source}] "
+            f"target=[{config_dir}].")
 
     return io_utils.load_json(
         io_utils.get_config_file(config_dir, filename)
