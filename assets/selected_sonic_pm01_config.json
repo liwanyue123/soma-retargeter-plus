@@ -1,0 +1,9 @@
+{
+	"import_folder": "/home/wayne/dataset/selected_sonic",
+	"export_folder": "/home/wayne/dataset/selected_sonic_csv/pm01",
+	"batch_size": 100,
+	"retargeter": "Newton",
+	"retarget_source": "soma",
+	"retarget_target": "engineai_pm01",
+	"retarget_source_facing_direction": "Mujoco"
+}
