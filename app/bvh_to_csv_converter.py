@@ -122,6 +122,17 @@ class Viewer:
                 print(f"[WARN]: default_bvh_file not found: {bvh_path}")
 
         self._init_calibration()
+        self._init_scene_objects()
+
+    def _init_scene_objects(self):
+        """State for user-placed scene primitives (boxes, etc.)."""
+        self.scene_objects = []
+        self._scene_object_next_id = 0
+        self._selected_scene_object_idx = -1
+        self.show_scene_object_gizmos = True
+        self._scene_objects_status = ""
+        self._scene_object_logged_ids = set()
+        self._scene_unit_box_mesh_path = None
 
     def _init_calibration(self):
         """Set up state for the in-app bias-calibration panel.
@@ -250,7 +261,7 @@ class Viewer:
     def gui(self, ui):
         self.ui_playback_controls(ui)
         self.ui_scene_options(ui)
-        self.ui_calibration(ui)
+        self.ui_right_sidebar(ui)
 
     def load_csv_file(self, path):
         self.robot_csv_animation_buffers[0] = csv_utils.load_csv(path, csv_config=self.csv_config)
@@ -376,6 +387,8 @@ class Viewer:
                 self.viewer.log_gizmo(f"robot_offset{i}", offset)
             for i, offset in enumerate(self.animation_offsets):
                 self.viewer.log_gizmo(f"animation_offset{i}", offset)
+
+        self._render_scene_objects()
         
         self.viewer.log_state(self.state)
         self.viewer.end_frame()
@@ -515,23 +528,41 @@ class Viewer:
                 self.animation_offsets = [wp.transform_identity()] * len(self.skeleton_instances)
         ui.end()
 
-    def ui_calibration(self, ui):
-        """Right-side panel for computing per-joint bias (joint_offsets)."""
-        import tkinter as tk
-        from tkinter import filedialog as tk_filedialog
-
+    def ui_right_sidebar(self, ui):
+        """Single right-side window with collapsible Calibration + Scene Objects."""
         viewport = ui.get_main_viewport()
-
-        panel_size = ui.ImVec2(360, 600)
+        panel_width = 360
+        margin = _UI_NEWTON_PANEL_MARGIN
+        max_panel_h = float(viewport.size.y) - 2.0 * margin
         ui.set_next_window_pos(
-            ui.ImVec2(
-                viewport.size.x - _UI_NEWTON_PANEL_MARGIN - panel_size.x,
-                _UI_NEWTON_PANEL_MARGIN))
-        ui.set_next_window_size(panel_size, ui.Cond_.first_use_ever)
+            ui.ImVec2(viewport.size.x - margin - panel_width, margin))
+        ui.set_next_window_size_constraints(
+            ui.ImVec2(panel_width, 80),
+            ui.ImVec2(panel_width, max_panel_h))
         ui.set_next_window_bg_alpha(_UI_NEWTON_PANEL_ALPHA)
 
-        ui.begin("Calibration (Compute Bias)",
-                 flags=ui.WindowFlags_.no_collapse)
+        ui.begin(
+            "Right Panels",
+            flags=(ui.WindowFlags_.always_auto_resize | ui.WindowFlags_.no_collapse))
+
+        if ui.collapsing_header(
+                "Calibration (Compute Bias)",
+                flags=ui.TreeNodeFlags_.default_open):
+            self._draw_calibration_content(ui)
+
+        ui.separator()
+
+        if ui.collapsing_header(
+                "Scene Objects",
+                flags=ui.TreeNodeFlags_.default_open):
+            self._draw_scene_objects_content(ui)
+
+        ui.end()
+
+    def _draw_calibration_content(self, ui):
+        """Calibration controls (inside collapsible section)."""
+        import tkinter as tk
+        from tkinter import filedialog as tk_filedialog
 
         changed, self.calibration_mode = ui.checkbox(
             "Enable Calibration Mode", self.calibration_mode)
@@ -551,7 +582,6 @@ class Viewer:
                 "Turn on Calibration Mode to freeze BVH playback, "
                 "load the SOMA zero-pose reference, and edit the robot's "
                 "joint angles to match.")
-            ui.end()
             return
 
         ui.separator()
@@ -672,7 +702,235 @@ class Viewer:
             ui.separator()
             ui.text_wrapped(self._calibration_status)
 
-        ui.end()
+    def _add_scene_box(self):
+        obj_id = self._scene_object_next_id
+        self._scene_object_next_id += 1
+        n = len(self.scene_objects)
+        self.scene_objects.append({
+            "id": obj_id,
+            "name": f"Cube {obj_id}",
+            "type": "box",
+            "size": wp.vec3(0.5, 0.5, 0.5),
+            "transform": wp.transform(
+                wp.vec3(1.0, float(n) * 0.5, 0.25),
+                wp.quat_identity()),
+            "color": wp.vec3(0.9, 0.45, 0.15),
+        })
+        self._selected_scene_object_idx = len(self.scene_objects) - 1
+
+    def _ensure_scene_unit_box_mesh(self):
+        if self._scene_unit_box_mesh_path is not None:
+            return self._scene_unit_box_mesh_path
+        path = "/scene_objects/_unit_box_mesh"
+        self.viewer.log_geo(
+            path,
+            newton.GeoType.BOX,
+            (1.0, 1.0, 1.0),
+            0.0,
+            True,
+            hidden=True,
+        )
+        self._scene_unit_box_mesh_path = path
+        return path
+
+    def _hide_scene_object(self, obj_id):
+        path = f"/scene_objects/box_{obj_id}"
+        if hasattr(self.viewer, "objects") and path in self.viewer.objects:
+            obj = self.viewer.objects[path]
+            destroy = getattr(obj, "destroy", None)
+            if callable(destroy):
+                destroy()
+            del self.viewer.objects[path]
+        if hasattr(self.viewer, "_gizmo_log"):
+            self.viewer._gizmo_log.pop(f"scene_object_{obj_id}", None)
+        self._scene_object_logged_ids.discard(obj_id)
+
+    def _remove_selected_scene_object(self):
+        if not (0 <= self._selected_scene_object_idx < len(self.scene_objects)):
+            return
+        removed_id = self.scene_objects[self._selected_scene_object_idx]["id"]
+        self._hide_scene_object(removed_id)
+        del self.scene_objects[self._selected_scene_object_idx]
+        if not self.scene_objects:
+            self._selected_scene_object_idx = -1
+        else:
+            self._selected_scene_object_idx = min(
+                self._selected_scene_object_idx,
+                len(self.scene_objects) - 1)
+
+    def _save_scene_objects(self, path):
+        objects = []
+        for obj in self.scene_objects:
+            sz = obj["size"]
+            p = obj["transform"].p
+            q = obj["transform"].q
+            col = obj["color"]
+            objects.append({
+                "id": obj["id"],
+                "name": obj["name"],
+                "type": obj["type"],
+                "size": [float(sz[0]), float(sz[1]), float(sz[2])],
+                "position": [float(p[0]), float(p[1]), float(p[2])],
+                "quat_xyzw": [float(q[0]), float(q[1]), float(q[2]), float(q[3])],
+                "color": [float(col[0]), float(col[1]), float(col[2])],
+            })
+        data = {
+            "_comment": "Scene objects saved from BVH to CSV Converter.",
+            "next_id": self._scene_object_next_id,
+            "objects": objects,
+        }
+        pathlib.Path(path).write_text(json.dumps(data, indent=4))
+        self._scene_objects_status = f"Saved {len(objects)} object(s) to {path}"
+        print(f"[INFO]: {self._scene_objects_status}")
+
+    def _load_scene_objects(self, path):
+        try:
+            data = json.loads(pathlib.Path(path).read_text())
+        except Exception as e:
+            self._scene_objects_status = f"Failed to load: {e}"
+            return
+        loaded = []
+        for entry in data.get("objects", []):
+            if "size" in entry:
+                sz = entry["size"]
+            elif "half_size" in entry:
+                hs = entry["half_size"]
+                sz = [2.0 * float(hs[0]), 2.0 * float(hs[1]), 2.0 * float(hs[2])]
+            else:
+                sz = [0.5, 0.5, 0.5]
+            pos = entry.get("position", [0.0, 0.0, 0.0])
+            quat = entry.get("quat_xyzw", [0.0, 0.0, 0.0, 1.0])
+            col = entry.get("color", [0.9, 0.45, 0.15])
+            loaded.append({
+                "id": int(entry.get("id", self._scene_object_next_id)),
+                "name": entry.get("name", f"Cube {entry.get('id', 0)}"),
+                "type": entry.get("type", "box"),
+                "size": wp.vec3(float(sz[0]), float(sz[1]), float(sz[2])),
+                "transform": wp.transform(
+                    wp.vec3(float(pos[0]), float(pos[1]), float(pos[2])),
+                    wp.quat(float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3]))),
+                "color": wp.vec3(float(col[0]), float(col[1]), float(col[2])),
+            })
+        for old_id in list(self._scene_object_logged_ids):
+            self._hide_scene_object(old_id)
+        self.scene_objects = loaded
+        self._scene_object_next_id = int(data.get("next_id", 0))
+        for obj in loaded:
+            self._scene_object_next_id = max(self._scene_object_next_id, obj["id"] + 1)
+        self._selected_scene_object_idx = 0 if loaded else -1
+        self._scene_objects_status = f"Loaded {len(loaded)} object(s) from {path}"
+        print(f"[INFO]: {self._scene_objects_status}")
+
+    def _draw_scene_objects_content(self, ui):
+        """Scene-object controls (inside collapsible section)."""
+        import tkinter as tk
+        from tkinter import filedialog as tk_filedialog
+
+        if ui.button("Add Cube"):
+            self._add_scene_box()
+        ui.same_line()
+        can_remove = 0 <= self._selected_scene_object_idx < len(self.scene_objects)
+        if not can_remove:
+            ui.begin_disabled()
+        if ui.button("Remove"):
+            self._remove_selected_scene_object()
+        if not can_remove:
+            ui.end_disabled()
+        ui.same_line()
+        if ui.button("Save..."):
+            root = tk.Tk()
+            root.withdraw()
+            save_path = tk_filedialog.asksaveasfilename(
+                title="Save Scene Objects",
+                defaultextension=".json",
+                filetypes=[("JSON files", "*.json")])
+            if save_path:
+                self._save_scene_objects(save_path)
+        ui.same_line()
+        if ui.button("Load..."):
+            root = tk.Tk()
+            root.withdraw()
+            load_path = tk_filedialog.askopenfilename(
+                title="Load Scene Objects",
+                filetypes=[("JSON files", "*.json")])
+            if load_path:
+                self._load_scene_objects(load_path)
+
+        _, self.show_scene_object_gizmos = ui.checkbox(
+            "Show Transform Gizmo (drag in viewport)", self.show_scene_object_gizmos)
+
+        ui.separator()
+        ui.text("Select a cube, edit values below, or drag the gizmo in 3D.")
+        if ui.begin_child("##scene_object_list", ui.ImVec2(0, 100)):
+            for i, obj in enumerate(self.scene_objects):
+                selected = i == self._selected_scene_object_idx
+                if ui.selectable(f"{obj['name']}##scene_obj_{obj['id']}", selected):
+                    self._selected_scene_object_idx = i
+        ui.end_child()
+
+        if 0 <= self._selected_scene_object_idx < len(self.scene_objects):
+            obj = self.scene_objects[self._selected_scene_object_idx]
+            ui.push_id(obj["id"])
+            ui.separator()
+            ui.text(f"Editing: {obj['name']}")
+
+            sz = obj["size"]
+            sz_vals = [float(sz[0]), float(sz[1]), float(sz[2])]
+            ui.set_next_item_width(-1)
+            sz_changed, new_sz = ui.input_float3(
+                "Size (m) X / Y / Z", sz_vals, "%.4f")
+            if sz_changed:
+                obj["size"] = wp.vec3(
+                    max(0.001, float(new_sz[0])),
+                    max(0.001, float(new_sz[1])),
+                    max(0.001, float(new_sz[2])))
+
+            tx = obj["transform"]
+            p = tx.p
+            pos_vals = [float(p[0]), float(p[1]), float(p[2])]
+            ui.set_next_item_width(-1)
+            pos_changed, new_pos = ui.input_float3(
+                "Position (m)", pos_vals, "%.4f")
+            if pos_changed:
+                obj["transform"] = wp.transform(
+                    wp.vec3(float(new_pos[0]), float(new_pos[1]), float(new_pos[2])),
+                    tx.q)
+            ui.pop_id()
+
+        status = getattr(self, "_scene_objects_status", None)
+        if status:
+            ui.separator()
+            ui.text_wrapped(status)
+
+    def _render_scene_objects(self):
+        active_ids = set()
+        unit_mesh = self._ensure_scene_unit_box_mesh()
+
+        for i, obj in enumerate(self.scene_objects):
+            if obj.get("type") != "box":
+                continue
+            obj_id = obj["id"]
+            active_ids.add(obj_id)
+            sz = obj["size"]
+            path = f"/scene_objects/box_{obj_id}"
+            xforms = wp.array([obj["transform"]], dtype=wp.transform)
+            scales = wp.array(
+                [wp.vec3(float(sz[0]) * 0.5, float(sz[1]) * 0.5, float(sz[2]) * 0.5)],
+                dtype=wp.vec3)
+            colors = wp.array([obj["color"]], dtype=wp.vec3)
+            # Unit box (half=1 m) × scale (full_size / 2) = box with full_size edge lengths.
+            self.viewer.log_instances(
+                path, unit_mesh, xforms, scales, colors, None, hidden=False)
+
+            show_gizmo = (
+                self.show_scene_object_gizmos
+                and i == self._selected_scene_object_idx)
+            if show_gizmo:
+                self.viewer.log_gizmo(f"scene_object_{obj_id}", obj["transform"])
+
+        for stale_id in self._scene_object_logged_ids - active_ids:
+            self._hide_scene_object(stale_id)
+        self._scene_object_logged_ids = active_ids
 
     def _save_calibration_pose(self, path):
         ref_data = {

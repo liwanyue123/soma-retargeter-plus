@@ -3,216 +3,166 @@
 
 ![SOMA Retargeter Banner](assets/docs/banner.gif)
 
-Convert [SOMA](https://github.com/NVlabs/SOMA-X) human motion captures into humanoid robot joint animation. Takes BVH motion files as input and produces robot-playable CSV joint data as output using GPU-optimized inverse kinematics via [Newton](https://github.com/newton-physics/newton) and high-performance computation with [NVIDIA Warp](https://github.com/NVIDIA/warp).
+Convert [SOMA](https://github.com/NVlabs/SOMA-X) human motion captures into humanoid robot joint animation. Input is BVH motion on the SOMA skeleton; output is robot-playable CSV joint trajectories. Retargeting uses GPU IK via [Newton](https://github.com/newton-physics/newton) and [NVIDIA Warp](https://github.com/NVIDIA/warp).
 
-The retargeting pipeline handles proportional human-to-robot scaling, multi-objective IK solving with joint limits, feet stabilization to maintain ground contact, and per-DOF joint limit clamping. Currently supports SOMA as the input skeleton and Unitree G1 (29 DOF) as the output robot. Additional robot targets are planned.
+The pipeline applies human-to-robot scaling, multi-objective IK with joint limits, feet stabilization, and per-DOF clamping.
 
-SOMA Retargeter is part of the [SOMA body model](https://github.com/NVlabs/SOMA-X) ecosystem for humanoid motion data.
+> **Note:** Active development — APIs and configs may change between releases.
 
-> **Note:** This project is in active development. The API may change between releases as the design is refined.
+## Supported robots
+
+| `retarget_target` | Config | Notes |
+|-------------------|--------|--------|
+| `unitree_g1` | `assets/default_bvh_to_csv_converter_config.json` | Unitree G1 (29 DOF) |
+| `engineai_pm01` | `assets/pm01_bvh_to_csv_converter_config.json` | EngineAI PM01 (24 DOF) |
+| `hightorque_pi_plus` | `assets/pi_plus_bvh_to_csv_converter_config.json` | Hightorque Pi Plus (20 DOF) |
+| `pndbotics_adam_lite` | `assets/adam_lite_bvh_to_csv_converter_config.json` | PND Adam Lite (25 DOF) |
+
+Set `retarget_target` in the config JSON, or pick the matching config file on the command line.
 
 ## Requirements
 
-- **Python:** 3.12
-- **Git LFS:** Installed and initialized for asset downloads
-- **OS:** Windows (x86-64) and Linux (x86-64, aarch64)
-- **GPU:** NVIDIA GPU (Maxwell or newer), driver 545+ (CUDA 12). No local CUDA Toolkit installation required.
+- **Python** 3.12
+- **Git LFS** (for meshes and sample motions)
+- **OS** Windows (x86-64), Linux (x86-64, aarch64)
+- **GPU** NVIDIA Maxwell or newer, driver 545+ (CUDA 12). No local CUDA Toolkit required.
 
 ## Installation
 
 <details>
+<summary>Setup (conda or uv)</summary>
 
-<summary>Setup instructions</summary>
-
-### Method 1 (conda + pip)
-
-#### 1. Create and Activate Conda Environment
+### conda + pip
 
 ```bash
 conda create -n soma-retargeter python=3.12 -y
 conda activate soma-retargeter
-```
-
-#### 2. Download LFS Assets
-
-```bash
+cd soma-retargeter-plus
 git lfs pull
+pip install --extra-index-url https://pypi.nvidia.com .
 ```
 
-#### 3. Install the Library
+`warp-lang` is hosted on NVIDIA’s PyPI index — include `--extra-index-url` on install.
 
-```bash
-pip install .
-```
-
-### Method 2 (uv)
-
-#### 1. Install uv
-
-Follow the [official installation guide](https://docs.astral.sh/uv/getting-started/installation/) if `uv` is not yet installed.
-
-#### 2. Download LFS Assets
-
-```bash
-git lfs pull
-```
-
-#### 3. Sync the Project
-
-`uv sync` creates an isolated `.venv` virtual environment inside the project directory, installs the correct Python version and resolves all dependencies.
-
-```bash
-uv sync
-```
-
-### Platform-specific notes
-
-**Note (Linux):** For the GUI viewer to work, install `tkinter`
+**Linux GUI:** install tkinter if file dialogs fail:
 
 ```bash
 sudo apt-get install python3.12-tk
 ```
 
-**Note (Windows):** If `imgui-bundle` fails to install, the Microsoft Visual C++ Redistributables may be missing. Download from the [official Microsoft documentation](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
+**Windows:** if `imgui-bundle` fails to install, install the [VC++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
+
+### uv
+
+```bash
+git lfs pull
+uv sync
+```
+
+Use `uv run` instead of `python` in the commands below when using uv.
+
+### Verify
+
+```bash
+python -c "import newton, warp, soma_retargeter; print('OK')"
+```
 
 </details>
 
-## Motion Data
+## Sample data
 
-This repo includes 10 sample BVH/CSV pairs in `assets/motions/` for immediate testing.
+Ten sample BVH/CSV pairs live under `assets/motions/` for smoke tests.
 
-For large-scale motion data, see the [SEED dataset](https://huggingface.co/datasets/bones-studio/seed) (Skeletal Everyday Embodiment Dataset) published by [Bones Studio](https://huggingface.co/bones-studio). SEED provides a large-scale collection of human motions on the SOMA uniform-proportion skeleton, which is the expected input format for this tool. The G1 robot motion data included in SEED was retargeted using SOMA Retargeter.
+For larger SOMA-skeleton datasets, see the [SEED dataset](https://huggingface.co/datasets/bones-studio/seed) ([Bones Studio](https://huggingface.co/bones-studio)). G1 motions in SEED were retargeted with this tool.
 
-## Quick Start
+## Quick start
 
-> When using **uv** (Method 2), replace `python` with `uv run` in the commands below.
-
-### Interactive viewer (OpenGL)
+### Interactive viewer
 
 ```bash
-python ./app/bvh_to_csv_converter.py --config ./assets/default_bvh_to_csv_converter_config.json --viewer gl
-python ./app/bvh_to_csv_converter.py   --config ./assets/pm01_bvh_to_csv_converter_config.json   --viewer gl
-python ./app/bvh_to_csv_converter.py   --config ./assets/pi_plus_bvh_to_csv_converter_config.json   --viewer gl
-python ./app/bvh_to_csv_converter.py   --config ./assets/adam_lite_bvh_to_csv_converter_config.json   --viewer gl
+conda activate soma-retargeter
+cd soma-retargeter-plus
 
-
-
+# Default: Unitree G1
+python app/bvh_to_csv_converter.py \
+  --config assets/default_bvh_to_csv_converter_config.json \
+  --viewer gl
 ```
 
-![Interactive viewer interface](assets/docs/interactive-viewer-screenshot.png)
-
-The viewer displays the source SOMA motion alongside the retargeted robot in a 3D viewport. Use the right panel to load BVH files, run retargeting, and save CSV output. Playback controls at the bottom allow scrubbing, speed adjustment, and looping. Toggle visibility of the skinned mesh, skeleton, joint axes, and positioning gizmos.
-
-### Batch conversion (headless)
-
-Process a folder of BVH files without a display. Set `import_folder` and `export_folder` in the config file, then run:
+Other robots — same command, different config:
 
 ```bash
-python ./app/bvh_to_csv_converter.py --config ./assets/default_bvh_to_csv_converter_config.json --viewer null
+python app/bvh_to_csv_converter.py --config assets/pm01_bvh_to_csv_converter_config.json --viewer gl
+python app/bvh_to_csv_converter.py --config assets/pi_plus_bvh_to_csv_converter_config.json --viewer gl
+python app/bvh_to_csv_converter.py --config assets/adam_lite_bvh_to_csv_converter_config.json --viewer gl
 ```
 
-Batch mode recursively finds all `.bvh` files in the import folder, processes them in configurable batch sizes, and writes CSV files to the export folder mirroring the input directory structure.
+![Interactive viewer](assets/docs/interactive-viewer-screenshot.png)
 
-## Code Overview
+**Typical workflow**
 
-### `app/`
+1. **Scene Options** (top-right): **Load** a `.bvh` → **Retarget** → **Save** CSV.
+2. Use **Playback Controls** (bottom) to scrub, change speed, or loop.
+3. Toggle mesh / skeleton / joint axes / gizmos under **Visibility**.
 
-| File | Description |
-|------|-------------|
-| `bvh_to_csv_converter.py` | Main entry point. Drives both interactive and headless batch retargeting modes. |
+**Right Panels**
 
-### `soma_retargeter/`
+- **Calibration (Compute Bias)** — match the robot zero pose to SOMA, then compute/write `joint_scales` and `joint_offsets` in the scaler config. Enable *Calibration Mode* to freeze playback and edit joints.
+- **Scene Objects** — place reference boxes in the viewport (size in meters, drag gizmo or type position). **Save…** / **Load…** writes a JSON scene file.
 
-| Module | Description |
-|--------|-------------|
-| `animation/` | Core data structures for skeletons, animation buffers, IK, and skinned meshes. |
-| `assets/` | File I/O for BVH, CSV, and USD formats. |
-| `pipelines/` | Retargeting pipeline: IK solving, feet stabilization, and joint limit clamping. |
-| `robotics/` | Human-to-robot scaling and robot output formatting. |
-| `renderers/` | Visualization for the interactive viewer. |
-| `utils/` | Math, pose, coordinate conversion, Newton and Warp helpers. |
-| `configs/` | JSON configuration for retargeting, scaling, and feet stabilization parameters. |
+### Batch (headless)
 
-## Related Work
+Edit `import_folder` and `export_folder` in the config, then:
 
-SOMA Retargeter is a support tool within the SOMA ecosystem for humanoid motion data:
+```bash
+python app/bvh_to_csv_converter.py \
+  --config assets/default_bvh_to_csv_converter_config.json \
+  --viewer null
+```
 
-* [SOMA Body Model](https://github.com/NVlabs/SOMA-X) - Parametric human body model with standardized skeleton, mesh, and shape parameters
-* [GEM-X](https://github.com/NVlabs/GEM-X) - Human motion estimation from video
-* [Kimodo](https://github.com/nv-tlabs/kimodo) - Kinematic motion diffusion model for text and constraint-driven 3D human and robot motion generation
-* [ProtoMotions](https://github.com/NVlabs/ProtoMotions) - GPU-accelerated simulation and learning framework for training physically simulated digital humans and humanoid robots
-* [SONIC](https://nvlabs.github.io/GEAR-SONIC/) - Whole-body control for humanoid robots, training locomotion and interaction policies
+All `.bvh` files under `import_folder` are processed recursively; CSVs are written under `export_folder` with the same folder layout.
+
+Pre-made batch configs for SONIC-style exports:
+
+- `assets/selected_sonic_g1_config.json`
+- `assets/selected_sonic_pm01_config.json`
+- `assets/selected_sonic_pnd_config.json`
+
+### CLI calibration (optional)
+
+Equivalent to the in-viewer calibration buttons:
+
+```bash
+python tools/calibrate_robot_offsets.py <robot_type> --scales --calc-pos --write
+```
+
+Use the GUI calibration panel when tuning a new robot’s scaler config for the first time.
+
+## Project layout
+
+| Path | Role |
+|------|------|
+| `app/bvh_to_csv_converter.py` | Entry point (GUI + batch) |
+| `soma_retargeter/pipelines/` | Retargeting, IK, feet stabilization |
+| `soma_retargeter/robotics/` | Human-to-robot scaling |
+| `soma_retargeter/configs/` | Per-robot scaler / retargeter JSON |
+| `soma_retargeter/renderers/` | Viewer drawing helpers |
+| `assets/robots/` | Robot MJCF / meshes |
+
+## Related work
+
+Part of the [SOMA](https://github.com/NVlabs/SOMA-X) ecosystem:
+
+- [SOMA Body Model](https://github.com/NVlabs/SOMA-X)
+- [GEM-X](https://github.com/NVlabs/GEM-X)
+- [Kimodo](https://github.com/nv-tlabs/kimodo)
+- [ProtoMotions](https://github.com/NVlabs/ProtoMotions)
+- [SONIC](https://nvlabs.github.io/GEAR-SONIC/)
 
 ## Acknowledgments
 
-This project draws inspiration and builds upon excellent open-source work, including:
-* [GMR](https://github.com/YanjieZe/GMR) - General Motion Retargeting
-* [PyRoki](https://pyroki-toolkit.github.io/) - A Modular Toolkit for Robot Kinematic Optimization
+Inspired by [GMR](https://github.com/YanjieZe/GMR) and [PyRoki](https://pyroki-toolkit.github.io/).
 
 ## License
 
-This codebase is licensed under [Apache-2.0](LICENSE).
-
-This project will download and install additional third-party open source software projects. Review the license terms of these open source projects before use.
-
-
-一、环境配置（只需做一次）
-# 1. 清理掉之前那个空壳（如果你那个 (soma-retargeter) 提示还残留就跑这步）
-rm -rf /home/wayne/miniconda3/envs/soma-retargeter
-# 2. 创建干净的 Python 3.12 环境
-conda create -n soma-retargeter python=3.12 -y
-# 3. 激活环境
-conda activate soma-retargeter
-# 4. 进项目目录
-cd /home/wayne/soma-retargeter
-# 5. 拉 LFS 大文件（BVH 样例 + USD mesh）
-git lfs install --local
-git lfs pull
-# 6. 安装项目（必须带 NVIDIA 的 pypi index，warp-lang 1.12.0 只在那有）
-pip install --extra-index-url https://pypi.nvidia.com .
-# 7.（可选）GUI 文件对话框需要 tkinter；conda 的 python 3.12 一般自带，没有再装
-sudo apt-get install -y python3.12-tk
-验证安装
-python -c "import newton, warp, soma_retargeter; print('newton', newton.__version__, '| warp', warp.__version__, '| OK')"
-预期输出（首次会触发 Warp 初始化日志，能看到 cuda:0 NVIDIA GeForce RTX 5070 Laptop GPU 就对了）：
-
-newton 1.0.0 | warp 1.12.0 | OK
-二、日常运行
-每次开新终端时，先激活环境：
-
-conda activate soma-retargeter
-cd /home/wayne/soma-retargeter-plus
-然后选一个跑法：
-
-1) 交互式 GUI（OpenGL viewer）
-python ./app/bvh_to_csv_converter.py \
-  --config ./assets/default_bvh_to_csv_converter_config.json \
-  --viewer gl
-GUI 里：右下角面板 Load 选一个 .bvh → Retarget → CSV 那行 Save 导出。
-
-2) 批量无头处理（headless）
-先编辑 assets/default_bvh_to_csv_converter_config.json 里的 import_folder / export_folder，再跑：
-
-python ./app/bvh_to_csv_converter.py \
-  --config ./assets/default_bvh_to_csv_converter_config.json \
-  --viewer null
-
-支持的机器人（assets/<robot>_bvh_to_csv_converter_config.json 里 retarget_target 字段）：
-
-| Robot string | Source folder | Notes |
-|---|---|---|
-| `unitree_g1` | `assets/robots/unitree_g1/` | 29 DOF, Newton built-in fallback |
-| `engineai_pm01` | `assets/robots/engineai_pm01/` | 24 DOF (含头部 yaw)，已校准 |
-| `hightorque_pi_plus` | `assets/robots/hightorque_pi_plus/` | 20 DOF 小型人形，placeholder offsets，需要 GUI 校准 |
-| `pndbotics_adam_lite` | `assets/robots/pndbotics_adam_lite/` | 25 DOF 全尺寸人形，placeholder offsets，需要 GUI 校准 |
-
-新机器人的 bias 校准流程：先用 GUI 进 Calibrate Mode 调零位姿/yaw，"Compute Scales" → "Write scales to Config" → "Compute Offsets" → "Write offsets to Config"。CLI 等价命令：`python tools/calibrate_robot_offsets.py <robot> --scales --calc-pos --write`。
-3) 单文件 + 自定义 BVH 骨骼（SFU/CMU 风格）
-仓库里已有的脚本：
-
-python ./scripts/retarget_sfu_bvh.py path/to/your.bvh \
-  -o path/to/output.csv \
-  --height 1.75
---height 是演员身高（米），用于 human→robot 的整体缩放。
-
- 
+[Apache-2.0](LICENSE). Third-party dependencies have their own licenses — review before redistribution.
