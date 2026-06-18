@@ -102,17 +102,19 @@ class EngineAIPM01_CSVConfig(_StandardCSVConfig):
 
 @dataclass
 class HighTorquePiPlus_CSVConfig(_StandardCSVConfig):
-    """20-DOF small humanoid by HighTorque (no waist, no wrist, no head)."""
-    name: str = "hightorque_pi_plus_20dof"
+    """23-DOF humanoid by HighTorque (1-DOF waist, no wrist, 2-DOF head)."""
+    name: str = "hightorque_pi_plus_23dof"
     csv_header: ClassVar[List[str]] = _ROOT_HEADER + [
-        "l_hip_pitch_joint", "l_hip_roll_joint", "l_thigh_joint",
-        "l_calf_joint", "l_ankle_pitch_joint", "l_ankle_roll_joint",
-        "l_shoulder_pitch_joint", "l_shoulder_roll_joint",
-        "l_upper_arm_joint", "l_elbow_joint",
         "r_hip_pitch_joint", "r_hip_roll_joint", "r_thigh_joint",
         "r_calf_joint", "r_ankle_pitch_joint", "r_ankle_roll_joint",
+        "l_hip_pitch_joint", "l_hip_roll_joint", "l_thigh_joint",
+        "l_calf_joint", "l_ankle_pitch_joint", "l_ankle_roll_joint",
+        "waist_yaw_joint",
         "r_shoulder_pitch_joint", "r_shoulder_roll_joint",
-        "r_upper_arm_joint", "r_elbow_joint"]
+        "r_upper_arm_joint", "r_elbow_joint",
+        "l_shoulder_pitch_joint", "l_shoulder_roll_joint",
+        "l_upper_arm_joint", "l_elbow_joint",
+        "head_yaw_joint", "head_pitch_joint"]
 
 
 @dataclass

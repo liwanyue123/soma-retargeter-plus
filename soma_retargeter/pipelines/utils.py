@@ -38,7 +38,7 @@ _STR_TO_TARGET_TYPE = {s : t for t, s in _TARGET_TYPE_TO_STR.items()}
 _ROBOT_MJCF_RELATIVE_PATH = {
     "unitree_g1":          "mjcf/g1_29dof_rev_1_0.xml",
     "engineai_pm01":       "pm.xml",
-    "hightorque_pi_plus":  "pi_plus_24dof.xml",
+    "hightorque_pi_plus":  "xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml",
     "pndbotics_adam_lite": "adam_lite.xml",
 }
 
