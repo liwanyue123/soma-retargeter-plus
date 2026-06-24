@@ -25,14 +25,14 @@
         "Hips": {
             "t_body" : "LINK_BASE",
             "r_body" : "LINK_BASE",
-            "t_weight" : 30.0,
-            "r_weight" : 2.0
+            "t_weight" : 2.0,
+            "r_weight" : 1.0
         },
         "Chest": {
             "t_body" : "LINK_TORSO_YAW",
             "r_body" : "LINK_TORSO_YAW",
-            "t_weight" : 0.7,
-            "r_weight" : 0.7
+            "t_weight" : 2.0,
+            "r_weight" : 1.0
         },
         "LeftArm": {
             "t_body" : "LINK_SHOULDER_ROLL_L",
@@ -50,7 +50,7 @@
             "t_body" : "LINK_ELBOW_YAW_L",
             "r_body" : "LINK_ELBOW_YAW_L",
             "t_weight" : 2.0,
-            "r_weight" : 1.2
+            "r_weight" : 0.3
         },
         "RightArm": {
             "t_body" : "LINK_SHOULDER_ROLL_R",
@@ -68,7 +68,7 @@
             "t_body" : "LINK_ELBOW_YAW_R",
             "r_body" : "LINK_ELBOW_YAW_R",
             "t_weight" : 2.0,
-            "r_weight" : 1.2
+            "r_weight" : 0.3
         },
         "LeftLeg": {
             "t_body" : "LINK_HIP_ROLL_L",

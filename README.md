@@ -124,9 +124,27 @@ All `.bvh` files under `import_folder` are processed recursively; CSVs are writt
 
 Pre-made batch configs for SONIC-style exports:
 
-- `assets/selected_sonic_g1_config.json`
-- `assets/selected_sonic_pm01_config.json`
-- `assets/selected_sonic_pnd_config.json`
+```bash
+# Unitree G1
+python app/bvh_to_csv_converter.py \
+  --config assets/selected_sonic_g1_config.json \
+  --viewer null
+
+# EngineAI PM01
+python app/bvh_to_csv_converter.py \
+  --config assets/selected_sonic_pm01_config.json \
+  --viewer null
+
+# Hightorque Pi Plus
+python app/bvh_to_csv_converter.py \
+  --config assets/selected_sonic_pi_config.json \
+  --viewer null
+
+# PND Adam Lite
+python app/bvh_to_csv_converter.py \
+  --config assets/selected_sonic_pnd_config.json \
+  --viewer null
+```
 
 ### CLI calibration (optional)
 

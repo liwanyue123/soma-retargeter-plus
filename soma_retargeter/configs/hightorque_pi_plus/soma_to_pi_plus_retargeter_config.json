@@ -25,14 +25,14 @@
         "Hips": {
             "t_body" : "base_link",
             "r_body" : "base_link",
-            "t_weight" : 30.0,
-            "r_weight" : 2.0
+            "t_weight" : 2.0,
+            "r_weight" : 1.0
         },
         "Chest": {
             "t_body" : "base_link",
             "r_body" : "base_link",
-            "t_weight" : 0.5,
-            "r_weight" : 0.3
+            "t_weight" : 2.0,
+            "r_weight" : 1.0
         },
         "LeftArm": {
             "t_body" : "l_shoulder_roll_link",

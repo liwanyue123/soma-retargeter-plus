@@ -1,0 +1,9 @@
+{
+	"import_folder": "/home/wayne/dataset/soma_uniform",
+	"export_folder": "/home/wayne/dataset/sonic_csv/g1",
+	"batch_size": 100,
+	"retargeter": "Newton",
+	"retarget_source": "soma",
+	"retarget_target": "unitree_g1",
+	"retarget_source_facing_direction": "Mujoco"
+}

@@ -44,13 +44,13 @@
             "t_body" : "elbowLeft",
             "r_body" : "elbowLeft",
             "t_weight" : 1.0,
-            "r_weight" : 1.0
+            "r_weight" : 0.5
         },
         "LeftHand": {
             "t_body" : "wristYawLeft",
             "r_body" : "wristYawLeft",
             "t_weight" : 2.0,
-            "r_weight" : 1.2
+            "r_weight" : 0.5
         },
         "RightArm": {
             "t_body" : "shoulderRollRight",
@@ -62,13 +62,13 @@
             "t_body" : "elbowRight",
             "r_body" : "elbowRight",
             "t_weight" : 1.0,
-            "r_weight" : 1.0
+            "r_weight" : 0.5
         },
         "RightHand": {
             "t_body" : "wristYawRight",
             "r_body" : "wristYawRight",
             "t_weight" : 2.0,
-            "r_weight" : 1.2
+            "r_weight" : 0.5
         },
         "LeftLeg": {
             "t_body" : "hipRollLeft",
