@@ -6,7 +6,7 @@ Given:
   - SOMA's zero-pose BVH (already in repo)
   - The robot's MJCF
   - The robot's reference joint angles (a pose that physically matches the
-    SOMA zero pose), stored in ``tools/<robot>_reference_pose.json``
+    SOMA zero pose), stored in ``tools/reference_poses/<robot>_reference_pose.json``
 
 The math lives in :mod:`soma_retargeter.robotics.calibration`. This script is
 a thin CLI wrapper.
@@ -86,7 +86,7 @@ def main():
         "--ref",
         default=None,
         help="Path to reference pose JSON. Defaults to "
-             "tools/<robot_type>_reference_pose.json")
+             "tools/reference_poses/<robot_type>_reference_pose.json")
     parser.add_argument(
         "--write",
         action="store_true",
@@ -119,7 +119,7 @@ def main():
     args = parser.parse_args()
 
     ref_path = Path(args.ref) if args.ref else (
-        Path(__file__).parent / f"{args.robot_type}_reference_pose.json")
+        Path(__file__).parent / "reference_poses" / f"{args.robot_type}_reference_pose.json")
     if not ref_path.exists():
         print(f"[ERROR]: Reference pose file not found: {ref_path}")
         sys.exit(1)

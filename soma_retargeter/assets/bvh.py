@@ -522,7 +522,7 @@ class BVHImporter(object):
             cls.load_frame_animation_data(skeleton, child, frame, positions_array, rotations_array, joint_indices, rotate_orders)
 
 
-def load_bvh(bvh_file: str, input_skeleton=None):
+def load_bvh(bvh_file: str, input_skeleton=None, position_scale: float = 1.0, recenter_xy: bool = False):
     """
     Load a BVH animation file and create ``Skeleton`` and ``AnimationBuffer`` objects.
 
@@ -531,6 +531,12 @@ def load_bvh(bvh_file: str, input_skeleton=None):
         input_skeleton (optional): An existing skeleton to conform the loaded animation to.
             If provided, the loaded animation will be adapted to match this skeleton's structure.
             Defaults to None.
+        position_scale (float): Extra uniform scale applied to all joint positions
+            (on top of the built-in cm->m conversion). Use this to bring a source
+            skeleton authored in a non-metric unit to real size. Defaults to 1.0.
+        recenter_xy (bool): If True, shift the whole clip horizontally so the root's
+            frame-0 X/Y sit at the origin (height is preserved). Useful for native
+            mocap that carries a world-space offset. Defaults to False.
 
     Returns:
         tuple (Skeleton, AnimationBuffer):
@@ -545,9 +551,19 @@ def load_bvh(bvh_file: str, input_skeleton=None):
         f"{animation.num_frames} frames @ {animation.sample_rate} FPS in "
         f"{(importer.animation_load_time + importer.animation_convert_time):.2f}s")
 
+    if position_scale != 1.0:
+        # Scale every joint's translation component (layout is (..., 7): px,py,pz,qx,qy,qz,qw).
+        skeleton._reference_local_transforms[..., 0:3] *= position_scale
+        animation.local_transforms[..., 0:3] *= position_scale
+
     if input_skeleton is not None:
         # conform to input skeleton
-        new_animation = create_animation_buffer_for_skeleton(animation, input_skeleton)
-        return input_skeleton, new_animation
-    else:
-        return skeleton, animation
+        animation = create_animation_buffer_for_skeleton(animation, input_skeleton)
+        skeleton = input_skeleton
+
+    if recenter_xy and animation.num_frames > 0:
+        # Root is joint 0; remove its frame-0 horizontal offset from all frames.
+        root_xy = animation.local_transforms[0, 0, 0:2].copy()
+        animation.local_transforms[:, 0, 0:2] -= root_xy
+
+    return skeleton, animation

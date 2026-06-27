@@ -14,7 +14,19 @@ class HumanToRobotScaler:
     """
     Scale and map human motion to robot-aligned effectors.
     """
-    def __init__(self, skeleton: Skeleton, human_height, config_file):
+    def __init__(self, skeleton: Skeleton, human_height, config_file, offsets_file=None):
+        """
+        Args:
+            skeleton: Common skeleton of the source clips.
+            human_height: Source actor height (``model_height``) used for the
+                height-ratio scaling.
+            config_file: Scaler config holding ``joint_scales`` / ``joint_parents``
+                (and, unless ``offsets_file`` is given, ``joint_offsets``).
+            offsets_file: Optional separate config holding ``{"joint_offsets": ...}``.
+                When provided, ``joint_offsets`` are read from here instead of from
+                ``config_file`` (keeps tracking scales and calibration offsets in
+                separate files per data source).
+        """
         config = io_utils.load_json(config_file)
         self.robot_type = config['robot_type']
         self.skeleton = skeleton
@@ -25,15 +37,23 @@ class HumanToRobotScaler:
             joint_scales[key] *= ratio
 
         joint_offsets = {}
-        joint_offset_data = config['joint_offsets']
+        if offsets_file is not None:
+            joint_offset_data = io_utils.load_json(offsets_file)['joint_offsets']
+        else:
+            joint_offset_data = config['joint_offsets']
         for joint_name, entry in joint_offset_data.items():
             t_offset, q_offset = entry
             joint_offsets[joint_name] = wp.transform(
                 wp.vec3(*t_offset),
                 wp.normalize(wp.quat(*q_offset)))
 
-        joint_offsets["LeftToeBase"] = joint_offsets["LeftToe"]
-        joint_offsets["RightToeBase"] = joint_offsets["RightToe"]
+        # SOMA convention: ToeBase shares the Toe joint's offset. Native skeletons
+        # may already define ToeBase directly (and have no "Toe"), so only alias
+        # when a "Toe" entry exists and "ToeBase" is not already provided.
+        if "LeftToe" in joint_offsets:
+            joint_offsets.setdefault("LeftToeBase", joint_offsets["LeftToe"])
+        if "RightToe" in joint_offsets:
+            joint_offsets.setdefault("RightToeBase", joint_offsets["RightToe"])
 
         self.mapped_joints = [name for name in self.skeleton.joint_names if name in joint_scales.keys()]
         self.mapped_joint_indices = wp.array([self.skeleton.joint_index(name) for name in self.mapped_joints], dtype=wp.int32)

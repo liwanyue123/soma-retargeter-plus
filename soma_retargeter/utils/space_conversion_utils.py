@@ -10,10 +10,15 @@ class FacingDirectionType(IntEnum):
     """Enumeration of supported facing directions for source models."""
     MAYA = auto(),
     MUJOCO = auto()
+    # Source is already in Newton's frame (Z-up); no rotation is applied. Used by
+    # native (Z-up) mocap so it stands upright on the ground instead of being laid
+    # down by the Y-up SOMA conversion.
+    NEWTON = auto()
 
 _FACING_DIRECTION_TYPE_TO_STR = {
     FacingDirectionType.MAYA : "Maya",
-    FacingDirectionType.MUJOCO : "Mujoco"
+    FacingDirectionType.MUJOCO : "Mujoco",
+    FacingDirectionType.NEWTON : "Newton"
 }
 _STR_TO_FACING_DIRECTION_TYPE = {str : type for type, str in _FACING_DIRECTION_TYPE_TO_STR.items()}
 
@@ -56,7 +61,15 @@ class SpaceConverter:
     Utility class for converting between different coordinate spaces, such as from Maya or Mujoco to
     the internal representation used in Newton.
     """
-    def __init__(self, facing_direction: FacingDirectionType):
+    def __init__(self, facing_direction: FacingDirectionType, yaw_offset_deg: float = 0.0):
+        """
+        Args:
+            facing_direction: Source coordinate convention to map into Newton's frame.
+            yaw_offset_deg: Extra rotation (degrees) about the up axis (Newton Z),
+                applied AFTER the facing conversion. Use this to align a source whose
+                forward direction is flipped relative to the robot (e.g. 180 = the
+                source is back-to-back with the robot during calibration).
+        """
         if facing_direction == FacingDirectionType.MUJOCO:
             self.converter = wp.quat_from_axis_angle(wp.vec3(1, 0, 0), wp.radians(90.0))
         elif facing_direction == FacingDirectionType.MAYA:
@@ -65,6 +78,10 @@ class SpaceConverter:
             self.converter = q1 * q2
         else:
             self.converter = wp.quat_identity()
+
+        if yaw_offset_deg != 0.0:
+            yaw = wp.quat_from_axis_angle(wp.vec3(0, 0, 1), wp.radians(float(yaw_offset_deg)))
+            self.converter = yaw * self.converter
 
         self.converter_inverse = wp.quat_inverse(self.converter)
 

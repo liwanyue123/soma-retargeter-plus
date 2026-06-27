@@ -11,6 +11,9 @@ import soma_retargeter.assets.usd as usd_utils
 class SourceType(IntEnum):
     """Enumeration of supported source model types."""
     SOMA = auto()
+    # Native (non-SOMA) source skeleton. Selected via `--data mydata`; uses your
+    # own joint names + a dedicated retargeter config, with no SOMA skin mesh.
+    MYDATA = auto()
 
 
 class TargetType(IntEnum):
@@ -21,7 +24,8 @@ class TargetType(IntEnum):
     PNDBOTICS_ADAM_LITE = auto()
 
 _SOURCE_TYPE_TO_STR = {
-    SourceType.SOMA : "soma"
+    SourceType.SOMA   : "soma",
+    SourceType.MYDATA : "mydata",
 }
 _STR_TO_SOURCE_TYPE = {s : t for t, s in _SOURCE_TYPE_TO_STR.items()}
 
@@ -44,11 +48,18 @@ _ROBOT_MJCF_RELATIVE_PATH = {
 
 # Per-robot retargeter config filename under
 # soma_retargeter/configs/<robot_type>/.
+# Filenames are relative to soma_retargeter/configs/<robot_type>/ and grouped
+# into a per-source subfolder (soma/ or mydata/).
 _RETARGETER_CONFIG_FILENAME = {
-    (SourceType.SOMA, "unitree_g1"):          "soma_to_g1_retargeter_config.json",
-    (SourceType.SOMA, "engineai_pm01"):       "soma_to_pm01_retargeter_config.json",
-    (SourceType.SOMA, "hightorque_pi_plus"):  "soma_to_pi_plus_retargeter_config.json",
-    (SourceType.SOMA, "pndbotics_adam_lite"): "soma_to_adam_lite_retargeter_config.json",
+    (SourceType.SOMA, "unitree_g1"):          "soma/soma_to_g1_retargeter_config.json",
+    (SourceType.SOMA, "engineai_pm01"):       "soma/soma_to_pm01_retargeter_config.json",
+    (SourceType.SOMA, "hightorque_pi_plus"):  "soma/soma_to_pi_plus_retargeter_config.json",
+    (SourceType.SOMA, "pndbotics_adam_lite"): "soma/soma_to_adam_lite_retargeter_config.json",
+    # Native skeleton (route A): retarget straight from your own joint names.
+    (SourceType.MYDATA, "unitree_g1"):          "mydata/mydata_to_g1_retargeter_config.json",
+    (SourceType.MYDATA, "engineai_pm01"):       "mydata/mydata_to_pm01_retargeter_config.json",
+    (SourceType.MYDATA, "hightorque_pi_plus"):  "mydata/mydata_to_pi_plus_retargeter_config.json",
+    (SourceType.MYDATA, "pndbotics_adam_lite"): "mydata/mydata_to_adam_lite_retargeter_config.json",
 }
 
 
@@ -92,6 +103,61 @@ def get_robot_mjcf_path(robot_type: str) -> Path:
         )
     print(f"[INFO]: Using Newton built-in MJCF for [{robot_type}]: {fallback}")
     return fallback
+
+
+# Per-source coordinate convention + unit scale defaults. SOMA mocap is Y-up
+# (Maya/"Mujoco" conversion) in centimetres (the loader's built-in *0.01 puts it
+# in metres). Native ("mydata") mocap is already Z-up (Newton frame) and authored
+# ~3.16x smaller than cm-scale, so we apply an extra position scale to bring it to
+# real human size (~1.77 m) and keep it consistent with the robot.
+_SOURCE_FACING_DIRECTION = {
+    SourceType.SOMA   : "Mujoco",
+    SourceType.MYDATA : "Newton",
+}
+_SOURCE_POSITION_SCALE = {
+    SourceType.SOMA   : 1.0,
+    SourceType.MYDATA : 3.16,
+}
+# SOMA clips are authored at the origin; native clips carry a world offset, so
+# recenter them horizontally to behave the same.
+_SOURCE_RECENTER_XY = {
+    SourceType.SOMA   : False,
+    SourceType.MYDATA : True,
+}
+# Extra yaw (deg, about up axis) to align the source's forward with the robot.
+# mydata is captured back-to-back with the robot, so flip it 180 deg.
+_SOURCE_YAW_OFFSET_DEG = {
+    SourceType.SOMA   : 0.0,
+    SourceType.MYDATA : 180.0,
+}
+
+
+def get_source_facing_direction(source) -> str:
+    """Default facing-direction string for a source type (str or SourceType)."""
+    if isinstance(source, str):
+        source = get_source_type_from_str(source)
+    return _SOURCE_FACING_DIRECTION.get(source, "Mujoco")
+
+
+def get_source_position_scale(source) -> float:
+    """Extra position scale applied at load for a source type (str or SourceType)."""
+    if isinstance(source, str):
+        source = get_source_type_from_str(source)
+    return _SOURCE_POSITION_SCALE.get(source, 1.0)
+
+
+def get_source_recenter_xy(source) -> bool:
+    """Whether to horizontally recenter clips at load for a source type."""
+    if isinstance(source, str):
+        source = get_source_type_from_str(source)
+    return _SOURCE_RECENTER_XY.get(source, False)
+
+
+def get_source_yaw_offset_deg(source) -> float:
+    """Extra yaw (deg about up axis) to align the source's forward with the robot."""
+    if isinstance(source, str):
+        source = get_source_type_from_str(source)
+    return _SOURCE_YAW_OFFSET_DEG.get(source, 0.0)
 
 
 def get_source_str_from_type(source: SourceType) -> str:
@@ -176,12 +242,15 @@ def get_source_model_mesh(source: SourceType, skeleton) -> dict:
     """
     if source == SourceType.SOMA:
         return usd_utils.load_skeletal_mesh_from_usd(
-            str(io_utils.get_config_file('soma', 'soma_base_skel_minimal.usd')),
+            str(io_utils.get_config_file('sources', 'soma', 'soma_base_skel_minimal.usd')),
             skeleton,
             '/OUTPUT/c_geometry_grp',
             '/OUTPUT/c_skeleton_grp/Root')
 
-    raise ValueError(f"Unknown source type {source}.")
+    # Native / non-SOMA skeletons (mydata and any future source) have no skin
+    # mesh bound to SOMA joint names; callers fall back to drawing the skeleton
+    # bones directly.
+    return None
 
 
 def get_retargeter_config(source: SourceType, target: TargetType) -> dict:

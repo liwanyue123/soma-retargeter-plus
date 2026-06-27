@@ -37,7 +37,9 @@ class Viewer:
         self.viewer = viewer
         self.viewer.vsync = True
         self.config = config
-        self.converter = SpaceConverter(get_facing_direction_type_from_str(self.config['retarget_source_facing_direction']))
+        self.converter = SpaceConverter(
+            get_facing_direction_type_from_str(self.config['retarget_source_facing_direction']),
+            yaw_offset_deg=float(self.config.get('retarget_source_yaw_offset_deg', 0.0)))
 
         if isinstance(self.viewer, newton.viewer.ViewerNull):
             # Headless mode for batch processing
@@ -53,7 +55,20 @@ class Viewer:
         self.playback_loop       = True
         self.playback_total_time = 0.0
 
+        # Source skeleton type (selectable via the `--data` flag, which overrides
+        # 'retarget_source' in the config). Defaults to SOMA for back-compat.
+        self.source_str = self.config.get('retarget_source', 'soma')
+        self.source_type = pipeline_utils.get_source_type_from_str(self.source_str)
+        self.source_position_scale = float(self.config.get(
+            'retarget_source_position_scale',
+            pipeline_utils.get_source_position_scale(self.source_type)))
+        self.source_recenter_xy = bool(self.config.get(
+            'retarget_source_recenter_xy',
+            pipeline_utils.get_source_recenter_xy(self.source_type)))
+
         self.retarget_source_options = ['soma']
+        if self.source_str not in self.retarget_source_options:
+            self.retarget_source_options.append(self.source_str)
         self.retarget_target_options = [
             'unitree_g1',
             'engineai_pm01',
@@ -62,7 +77,7 @@ class Viewer:
         ]
         self.retarget_solver_options = ['Newton']
         self.retarget_solver_idx     = 0
-        self.retarget_source_idx     = 0
+        self.retarget_source_idx     = self.retarget_source_options.index(self.source_str)
 
         # Resolve currently selected robot from config (falls back to G1).
         self.robot_type = self.config.get('retarget_target', 'unitree_g1')
@@ -72,8 +87,10 @@ class Viewer:
         self.retarget_target_idx = self.retarget_target_options.index(self.robot_type)
         self.csv_config = csv_utils.get_csv_config_for_robot(self.robot_type)
 
-        self.show_skeleton_mesh = True
-        self.show_skeleton = False
+        # SOMA has a skin mesh; native skeletons don't, so default to drawing bones.
+        self._has_source_mesh = (self.source_type == pipeline_utils.SourceType.SOMA)
+        self.show_skeleton_mesh = self._has_source_mesh
+        self.show_skeleton = not self._has_source_mesh
         self.show_skeleton_joint_axes = False
         self.show_gizmos = True
 
@@ -142,28 +159,37 @@ class Viewer:
         expose them as sliders in the GUI.
         """
         self.calibration_mode = False
-        self.show_soma_reference = False
+        self.show_zero_pose_reference = False
 
         retargeter_cfg = pipeline_utils.get_retargeter_config(
-            pipeline_utils.SourceType.SOMA,
+            self.source_type,
             pipeline_utils.get_target_type_from_str(self.robot_type))
         self._calibration_retargeter_cfg = retargeter_cfg
 
         scaler_cfg_path = io_utils.get_config_file(retargeter_cfg['human_robot_scaler_config'])
         self._calibration_scaler_cfg_path = scaler_cfg_path
+        # joint_offsets (calibration results) may live in a separate file from
+        # joint_scales (tracking params); fall back to the scaler config if not.
+        offsets_cfg_rel = retargeter_cfg.get('joint_offsets_config')
+        self._calibration_offsets_cfg_path = (
+            io_utils.get_config_file(offsets_cfg_rel) if offsets_cfg_rel else scaler_cfg_path)
 
         init_bvh = io_utils.get_config_file(retargeter_cfg['initialization_pose'])
-        soma_skel, soma_anim = bvh_utils.load_bvh(init_bvh)
-        self.soma_reference_skeleton = soma_skel
-        self.soma_reference_local_zero = soma_anim.get_local_transforms(0).copy()
-        self.soma_reference_instance = SkeletonInstance(
-            soma_skel, [0.6, 0.7, 1.0],
+        ref_skel, ref_anim = bvh_utils.load_bvh(
+            init_bvh, position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy)
+        self.zero_pose_reference_skeleton = ref_skel
+        self.zero_pose_reference_local_zero = ref_anim.get_local_transforms(0).copy()
+        self.zero_pose_reference_instance = SkeletonInstance(
+            ref_skel, [0.6, 0.7, 1.0],
             self.converter.transform(wp.transform_identity()))
-        self.soma_reference_instance.set_local_transforms(self.soma_reference_local_zero)
+        self.zero_pose_reference_instance.set_local_transforms(self.zero_pose_reference_local_zero)
 
-        self.soma_reference_mesh = pipeline_utils.get_source_model_mesh(
-            pipeline_utils.SourceType.SOMA, soma_skel)
-        self.soma_reference_mesh_renderer = SkeletalMeshRenderer(self.soma_reference_mesh)
+        self.zero_pose_reference_mesh = pipeline_utils.get_source_model_mesh(
+            self.source_type, ref_skel)
+        self.zero_pose_reference_mesh_renderer = (
+            SkeletalMeshRenderer(self.zero_pose_reference_mesh)
+            if self.zero_pose_reference_mesh is not None else None)
+        self.zero_pose_reference_skeleton_renderer = SkeletonRenderer(ref_skel, [0])
 
         # Discover revolute joints (skip free + fixed) so we can build sliders.
         # joint_limit_lower/upper are indexed per-DOF (length = joint_dof_count),
@@ -198,7 +224,7 @@ class Viewer:
     def _build_reference_pose(self):
         """Per-robot calibration reference pose.
 
-        Loaded from ``tools/<robot_type>_reference_pose.json`` if present, so
+        Loaded from ``tools/reference_poses/<robot_type>_reference_pose.json`` if present, so
         adding a new robot does not require touching this file - just drop a
         reference-pose JSON in the right place.
 
@@ -217,7 +243,7 @@ class Viewer:
         Falls back to identity / zero angles if the file does not exist.
         """
         repo_root = pathlib.Path(__file__).parent.parent
-        ref_path = repo_root / "tools" / f"{self.robot_type}_reference_pose.json"
+        ref_path = repo_root / "tools" / "reference_poses" / f"{self.robot_type}_reference_pose.json"
         if not ref_path.exists():
             print(f"[INFO]: No reference pose JSON for [{self.robot_type}] at {ref_path}. "
                   "Calibration will use identity base + zero joint angles.")
@@ -277,14 +303,20 @@ class Viewer:
         if self.coordinate_renderer is not None:
             self.coordinate_renderer.clear(self.viewer)
 
-        self.skeleton, animation = bvh_utils.load_bvh(path)
+        self.skeleton, animation = bvh_utils.load_bvh(
+            path, position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy)
         self.skeleton_renderer = SkeletonRenderer(self.skeleton, [0])
         self.skeleton_instances = [SkeletonInstance(self.skeleton, _DEFAULT_COLOR, self.converter.transform(wp.transform_identity()))]
         self.animation_offsets = [wp.transform_identity()] * len(self.skeleton_instances)
         self.animation_buffers = [animation]
 
-        self.skeletal_mesh = pipeline_utils.get_source_model_mesh(pipeline_utils.SourceType.SOMA, self.skeleton)
-        self.skeletal_mesh_renderer = SkeletalMeshRenderer(self.skeletal_mesh)
+        self.skeletal_mesh = pipeline_utils.get_source_model_mesh(self.source_type, self.skeleton)
+        if self.skeletal_mesh is not None:
+            self.skeletal_mesh_renderer = SkeletalMeshRenderer(self.skeletal_mesh)
+        else:
+            # Native skeleton: no skin mesh -> show bones instead.
+            self.skeletal_mesh_renderer = None
+            self.show_skeleton = True
         self.compute_playback_total_time()
 
     def compute_playback_total_time(self):
@@ -373,14 +405,18 @@ class Viewer:
                 if self.show_skeleton_joint_axes:
                     tx = self.skeleton_instances[i].compute_global_transforms()
                     self.coordinate_renderer.draw(self.viewer, tx, 0.1, i)
-                if self.show_skeleton_mesh:
+                if self.show_skeleton_mesh and self.skeletal_mesh_renderer is not None:
                     self.skeletal_mesh_renderer.draw(self.viewer, self.skeleton_instances[i], self.skeleton_instances[i].color, i)
                 self.skeleton_instances[i].xform = prev_xform
 
-        if self.calibration_mode and self.show_soma_reference:
-            self.soma_reference_mesh_renderer.draw(
-                self.viewer, self.soma_reference_instance,
-                self.soma_reference_instance.color, 99)
+        if self.calibration_mode and self.show_zero_pose_reference:
+            if self.zero_pose_reference_mesh_renderer is not None:
+                self.zero_pose_reference_mesh_renderer.draw(
+                    self.viewer, self.zero_pose_reference_instance,
+                    self.zero_pose_reference_instance.color, 99)
+            else:
+                self.zero_pose_reference_skeleton_renderer.draw(
+                    self.viewer, self.zero_pose_reference_instance, 99)
 
         if self.show_gizmos:
             for i, offset in enumerate(self.robot_offsets):
@@ -559,6 +595,13 @@ class Viewer:
 
         ui.end()
 
+    def _clear_reference_overlay(self):
+        """Remove the zero-pose reference overlay (mesh for SOMA, bones otherwise)."""
+        if self.zero_pose_reference_mesh_renderer is not None:
+            self.zero_pose_reference_mesh_renderer.clear(self.viewer)
+        if getattr(self, "zero_pose_reference_skeleton_renderer", None) is not None:
+            self.zero_pose_reference_skeleton_renderer.clear(self.viewer)
+
     def _draw_calibration_content(self, ui):
         """Calibration controls (inside collapsible section)."""
         import tkinter as tk
@@ -566,11 +609,10 @@ class Viewer:
 
         changed, self.calibration_mode = ui.checkbox(
             "Enable Calibration Mode", self.calibration_mode)
-        if changed:
-            if self.calibration_mode:
-                self.is_playing = False
-            else:
-                self.soma_reference_mesh_renderer.clear(self.viewer)
+        if changed and not self.calibration_mode:
+            self._clear_reference_overlay()
+        elif changed and self.calibration_mode:
+            self.is_playing = False
 
         ui.text_colored(
             ui.ImVec4(0.6, 0.8, 1.0, 1.0),
@@ -580,20 +622,20 @@ class Viewer:
         if not self.calibration_mode:
             ui.text_wrapped(
                 "Turn on Calibration Mode to freeze BVH playback, "
-                "load the SOMA zero-pose reference, and edit the robot's "
+                "load the zero-pose reference, and edit the robot's "
                 "joint angles to match.")
             return
 
         ui.separator()
-        ref_changed, self.show_soma_reference = ui.checkbox(
-            "Show SOMA Zero Pose Overlay", self.show_soma_reference)
-        if ref_changed and not self.show_soma_reference:
-            self.soma_reference_mesh_renderer.clear(self.viewer)
+        ref_changed, self.show_zero_pose_reference = ui.checkbox(
+            "Show Zero Pose Overlay", self.show_zero_pose_reference)
+        if ref_changed and not self.show_zero_pose_reference:
+            self._clear_reference_overlay()
 
         ui.separator()
         if ui.collapsing_header("Robot Joint Sliders",
                                 flags=ui.TreeNodeFlags_.default_open):
-            ui.text("Adjust joint angles (rad) to match SOMA zero pose.")
+            ui.text("Adjust joint angles (rad) to match the zero pose.")
             if ui.button("Reset to Reference"):
                 self.reset_calibration_pose_to_reference()
             ui.same_line()
@@ -978,22 +1020,22 @@ class Viewer:
             scaler.get('human_height_assumption', 1.8))
 
     def _calibration_collect(self):
-        """Snapshot SOMA zero-pose and current robot pose for calibration."""
-        soma_globals = self.soma_reference_skeleton.compute_global_transforms(
-            self.soma_reference_local_zero,
+        """Snapshot source zero-pose and current robot pose for calibration."""
+        ref_globals = self.zero_pose_reference_skeleton.compute_global_transforms(
+            self.zero_pose_reference_local_zero,
             self.converter.transform(wp.transform_identity()))
         body_q = self.state.body_q.numpy()
         link_globals = calibration_utils.collect_robot_link_globals(
             self.robot_builder, body_q)
-        return soma_globals, link_globals
+        return ref_globals, link_globals
 
     def _do_compute_scales(self):
         """Compute joint_scales from the current matching reference poses."""
         ik_map = self._calibration_retargeter_cfg.get('ik_map', {})
-        soma_globals, link_globals = self._calibration_collect()
+        ref_globals, link_globals = self._calibration_collect()
         new_scales = calibration_utils.compute_scales(
-            soma_globals,
-            self.soma_reference_skeleton.joint_names,
+            ref_globals,
+            self.zero_pose_reference_skeleton.joint_names,
             link_globals,
             ik_map,
             height_ratio=self._calibration_height_ratio())
@@ -1004,9 +1046,9 @@ class Viewer:
         print(f"[INFO]: {self._calibration_status}")
 
     def _do_compute_bias(self):
-        """Compute joint_offsets from current SOMA zero pose + robot pose."""
+        """Compute joint_offsets from current source zero pose + robot pose."""
         ik_map = self._calibration_retargeter_cfg.get('ik_map', {})
-        soma_globals, link_globals = self._calibration_collect()
+        ref_globals, link_globals = self._calibration_collect()
 
         # Use the latest in-memory scales if the user just computed them,
         # otherwise fall back to whatever is currently saved in the config.
@@ -1015,8 +1057,8 @@ class Viewer:
 
         compute_pos = bool(getattr(self, "_calc_position", False))
         new_offsets = calibration_utils.compute_offsets(
-            soma_globals,
-            self.soma_reference_skeleton.joint_names,
+            ref_globals,
+            self.zero_pose_reference_skeleton.joint_names,
             link_globals,
             ik_map,
             compute_position=compute_pos,
@@ -1032,13 +1074,13 @@ class Viewer:
     def _do_write_offsets(self):
         if self._calibration_last_offsets is None:
             return
-        path = self._calibration_scaler_cfg_path
-        scaler_cfg = io_utils.load_json(path)
+        path = self._calibration_offsets_cfg_path
+        offsets_cfg = io_utils.load_json(path)
         keep_pos = not bool(getattr(self, "_calc_position", False))
         calibration_utils.merge_offsets_into_config(
-            scaler_cfg, self._calibration_last_offsets,
+            offsets_cfg, self._calibration_last_offsets,
             keep_existing_position=keep_pos)
-        calibration_utils.write_scaler_config(scaler_cfg, path)
+        calibration_utils.write_scaler_config(offsets_cfg, path)
         self._calibration_status = f"Wrote offsets to {path}"
         print(f"[INFO]: {self._calibration_status}")
 
@@ -1126,8 +1168,8 @@ class Viewer:
         batches = [bvh_files[i:i + batch_size] for i in range(0, len(bvh_files), batch_size)]
         
         # All skeletons should be the same, load one as our reference
-        bvh_importer = bvh_utils.BVHImporter()
-        bvh_skeleton, _ = bvh_importer.create_skeleton(batches[0][0])
+        bvh_skeleton, _ = bvh_utils.load_bvh(
+            batches[0][0], position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy)
 
         bvh_tx_converter = self.converter.transform(wp.transform_identity())
         expected_num_joints = bvh_skeleton.num_joints
@@ -1153,7 +1195,9 @@ class Viewer:
             print(f"[INFO]: Loading {len(batch)} animations...")
             animations = []
             for file_path in batch:
-                _, animation = bvh_utils.load_bvh(file_path, bvh_skeleton)
+                _, animation = bvh_utils.load_bvh(
+                    file_path, bvh_skeleton,
+                    position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy)
                 # All animations should be on the same skeleton
                 assert expected_num_joints == animation.skeleton.num_joints, (
                     f"[ERROR]: Unexpected number of joints in input motion. Expected {expected_num_joints}, "
@@ -1194,6 +1238,13 @@ def main():
         type=lambda x: None if x == "None" else str(x),
         default="./assets/default_bvh_to_csv_converter_config.json",
         help="Input json config file.")
+    parser.add_argument(
+        "--data",
+        type=str,
+        default=None,
+        help="Source skeleton type (e.g. 'soma', 'mydata'). Overrides "
+             "'retarget_source' in the config so you can run your own "
+             "skeleton natively without editing the config file.")
 
     viewer, args = newton.examples.init(parser)
     if not pathlib.Path(args.config).exists():
@@ -1201,6 +1252,24 @@ def main():
         exit(1)
 
     config = io_utils.load_json(args.config)
+    if args.data:
+        print(f"[INFO]: --data override: retarget_source = '{args.data}'")
+        config['retarget_source'] = args.data
+        # Apply this source's coordinate convention + unit scale so it loads
+        # upright, on the ground, and at a sensible size (these are the SOMA
+        # vs native-skeleton differences). The config's facing is SOMA's, so we
+        # override it for --data; an explicit position scale in the config wins.
+        config['retarget_source_facing_direction'] = pipeline_utils.get_source_facing_direction(args.data)
+        config.setdefault(
+            'retarget_source_position_scale',
+            pipeline_utils.get_source_position_scale(args.data))
+        config.setdefault(
+            'retarget_source_yaw_offset_deg',
+            pipeline_utils.get_source_yaw_offset_deg(args.data))
+        print(f"[INFO]: --data convention: facing="
+              f"{config['retarget_source_facing_direction']}, "
+              f"position_scale={config['retarget_source_position_scale']}, "
+              f"yaw_offset_deg={config['retarget_source_yaw_offset_deg']}")
     with wp.ScopedDevice(args.device):
         app = Viewer(viewer, config)
         if not isinstance(viewer, newton.viewer.ViewerNull):

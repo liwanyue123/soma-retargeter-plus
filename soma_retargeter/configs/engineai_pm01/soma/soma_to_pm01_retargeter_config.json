@@ -1,8 +1,8 @@
 {
-    "initialization_pose": "soma/soma_zero_frame0.bvh",
+    "initialization_pose": "sources/soma/soma_zero_frame0.bvh",
     "num_initialization_frames": 10,
     "num_stabilization_frames": 5,
-    "human_robot_scaler_config": "engineai_pm01/soma_to_pm01_scaler_config.json",
+    "human_robot_scaler_config": "engineai_pm01/soma/soma_to_pm01_scaler_config.json",
     "feet_stabilizer_config": "engineai_pm01/pm01_feet_stabilizer_config.json",
     "model_height": 1.40,
 

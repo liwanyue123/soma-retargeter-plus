@@ -75,8 +75,12 @@ class NewtonPipeline:
         self.robot_builder.add_mjcf(
             str(pipeline_utils.get_robot_mjcf_path(target_str)))
 
+        offsets_cfg = retargeter_config.get('joint_offsets_config')
+        offsets_file = io_utils.get_config_file(offsets_cfg) if offsets_cfg else None
         self.human_robot_scaler = HumanToRobotScaler(
-            skeleton, retargeter_config['model_height'], io_utils.get_config_file(retargeter_config['human_robot_scaler_config']))
+            skeleton, retargeter_config['model_height'],
+            io_utils.get_config_file(retargeter_config['human_robot_scaler_config']),
+            offsets_file=offsets_file)
 
         self.num_body_count = self.robot_builder.body_count
         self.num_dofs = self.robot_builder.joint_dof_count
@@ -110,7 +114,11 @@ class NewtonPipeline:
         self.num_initialization_frames = 0
         self.num_stabilization_frames = 0
         if (retargeter_config['initialization_pose']):
-            init_skel, init_anim = bvh_utils.load_bvh(io_utils.get_config_file(retargeter_config['initialization_pose']))
+            init_pose_scale = pipeline_utils.get_source_position_scale(self.source_type)
+            init_pose_recenter = pipeline_utils.get_source_recenter_xy(self.source_type)
+            init_skel, init_anim = bvh_utils.load_bvh(
+                io_utils.get_config_file(retargeter_config['initialization_pose']),
+                position_scale=init_pose_scale, recenter_xy=init_pose_recenter)
             self.initialization_pose = SkeletonInstance(init_skel, [0, 0, 0], wp.transform_identity())
             self.initialization_pose.set_local_transforms(init_anim.get_local_transforms(0))
             self.num_initialization_frames = retargeter_config.get('num_initialization_frames', _DEFAULT_NUM_INITIALIZATION_FRAMES)

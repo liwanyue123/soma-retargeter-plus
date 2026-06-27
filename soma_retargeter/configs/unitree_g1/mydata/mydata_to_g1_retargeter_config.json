@@ -1,11 +1,14 @@
 {
-    "initialization_pose": "soma/soma_zero_frame0.bvh",
+    "_comment": "Route-A native-skeleton retargeter config (mydata -> unitree_g1). ik_map keys are YOUR BVH joint names (see my_data/man_pabox_B_001.bvh); t_body/r_body targets are the G1 robot links (same links as soma_to_g1_retargeter_config.json). Name equivalences vs SOMA: Chest->Spine3, LeftLeg(thigh)->LeftUpLeg, LeftShin->LeftLeg, RightLeg->RightUpLeg, RightShin->RightLeg. joint_scales/joint_offsets start neutral; populate them with the in-app Calibration panel.",
+
+    "initialization_pose": "sources/mydata/man_pabox_init_pose.bvh",
     "num_initialization_frames": 10,
     "num_stabilization_frames": 5,
-    "human_robot_scaler_config": "unitree_g1/soma_to_g1_scaler_config.json",
+    "human_robot_scaler_config": "unitree_g1/mydata/mydata_to_g1_scaler_config.json",
+    "joint_offsets_config": "unitree_g1/mydata/mydata_to_g1_offsets_config.json",
     "feet_stabilizer_config": "unitree_g1/g1_feet_stabilizer_config.json",
     "model_height": 1.70,
-    
+
     "ik_iterations" : 24,
     "joint_limit_weight": 10.0,
     "smooth_joint_filter_weight": 5.5,
@@ -28,7 +31,7 @@
             "t_weight" : 30.0,
             "r_weight" : 2.0
         },
-        "Chest": {
+        "Spine3": {
             "t_body" : "torso_link",
             "r_body" : "torso_link",
             "t_weight" : 0.7,
@@ -70,13 +73,13 @@
             "t_weight" : 2.0,
             "r_weight" : 1.2
         },
-        "LeftLeg": {
+        "LeftUpLeg": {
             "t_body" : "left_hip_roll_link",
             "r_body" : "left_hip_roll_link",
             "t_weight" : 1.5,
             "r_weight" : 0.15
         },
-        "LeftShin": {
+        "LeftLeg": {
             "t_body" : "left_knee_link",
             "r_body" : "left_knee_link",
             "t_weight" : 1.0,
@@ -88,13 +91,13 @@
             "t_weight" : 30.0,
             "r_weight" : 2.0
         },
-        "RightLeg": {
+        "RightUpLeg": {
             "t_body" : "right_hip_roll_link",
             "r_body" : "right_hip_roll_link",
             "t_weight" : 1.5,
             "r_weight" : 0.15
         },
-        "RightShin": {
+        "RightLeg": {
             "t_body" : "right_knee_link",
             "r_body" : "right_knee_link",
             "t_weight" : 1.0,

@@ -97,6 +97,8 @@ python app/bvh_to_csv_converter.py --config assets/pi_plus_bvh_to_csv_converter_
 python app/bvh_to_csv_converter.py --config assets/adam_lite_bvh_to_csv_converter_config.json --viewer gl
 ```
 
+To retarget your own (non-SOMA) skeleton directly, add `--data <source>` — see [Custom (non-SOMA) data](#custom-non-soma-data).
+
 ![Interactive viewer](assets/docs/interactive-viewer-screenshot.png)
 
 **Typical workflow**
@@ -107,7 +109,7 @@ python app/bvh_to_csv_converter.py --config assets/adam_lite_bvh_to_csv_converte
 
 **Right Panels**
 
-- **Calibration (Compute Bias)** — match the robot zero pose to SOMA, then compute/write `joint_scales` and `joint_offsets` in the scaler config. Enable *Calibration Mode* to freeze playback and edit joints.
+- **Calibration (Compute Bias)** — match the robot zero pose to the source zero pose, then compute/write `joint_scales` and `joint_offsets` (see [Custom data](#custom-non-soma-data) for where each is stored per source). Enable *Calibration Mode* to freeze playback and edit joints.
 - **Scene Objects** — place reference boxes in the viewport (size in meters, drag gizmo or type position). **Save…** / **Load…** writes a JSON scene file.
 
 ### Batch (headless)
@@ -156,6 +158,90 @@ python tools/calibrate_robot_offsets.py <robot_type> --scales --calc-pos --write
 
 Use the GUI calibration panel when tuning a new robot’s scaler config for the first time.
 
+## Custom (non-SOMA) data
+
+You can retarget **your own mocap skeleton directly**, without first converting it to
+the SOMA skeleton (any such conversion re-bakes rotations onto different bone
+proportions and introduces foot sliding/drift, even from clean source data). Select a
+custom source with the `--data` flag:
+
+```bash
+# Unitree G1
+python app/bvh_to_csv_converter.py \
+  --config assets/default_bvh_to_csv_converter_config.json \
+  --viewer gl \
+  --data mydata
+
+# EngineAI PM01
+python app/bvh_to_csv_converter.py \
+  --config assets/pm01_bvh_to_csv_converter_config.json \
+  --viewer gl \
+  --data mydata
+
+# Hightorque Pi Plus
+python app/bvh_to_csv_converter.py \
+  --config assets/pi_plus_bvh_to_csv_converter_config.json \
+  --viewer gl \
+  --data mydata
+
+# PND Adam Lite
+python app/bvh_to_csv_converter.py \
+  --config assets/adam_lite_bvh_to_csv_converter_config.json \
+  --viewer gl \
+  --data mydata
+```
+
+`--data <source>` switches the pipeline to a registered non-SOMA source. The source's
+own joint names are used end-to-end, the SOMA skin mesh is skipped (the skeleton bones
+are drawn instead), and a dedicated retargeter config is loaded. Per-source load
+conventions — up-axis/facing, unit scale, horizontal recenter, and yaw offset vs. the
+robot — are all registered in `soma_retargeter/pipelines/utils.py` so onboarding a new
+source is mostly a matter of filling in tables + JSON configs.
+
+> **Each `--data` source is wired up per robot.** Every `(source, robot)` pair has its own
+> entry in `_RETARGETER_CONFIG_FILENAME` plus a matching `ik_map` / scaler / offsets /
+> init-pose config. `mydata` ships with starter configs for all four robots above, but
+> their `joint_scales` / `joint_offsets` are still neutral placeholders — run the in-app
+> **Calibration** panel once per robot to fill in real values (Adam Lite is already
+> calibrated). To add another robot or a brand-new source, see
+> [Adding a new source/robot pair](#custom-non-soma-data) below.
+
+**Config split per source.** Configs live under `configs/<robot>/<source>/` (e.g.
+`configs/engineai_pm01/mydata/`), with the robot-level `<robot>_feet_stabilizer_config.json`
+kept at `configs/<robot>/`. For custom sources, *tracking/scaling* and *calibration
+offsets* live in separate files so they can be regenerated independently:
+
+| File (under `configs/<robot>/<source>/`) | Holds |
+|------|-------|
+| `<source>_to_<robot>_scaler_config.json` | `joint_scales` (tracking) + `joint_parents` |
+| `<source>_to_<robot>_offsets_config.json` | `joint_offsets` (calibration result) |
+| `<source>_to_<robot>_retargeter_config.json` | `ik_map` (keyed by your joint names) + references the two files above via `human_robot_scaler_config` and `joint_offsets_config` |
+
+The retargeter config also points `initialization_pose` at a SOMA-style symmetric
+"holding-box" zero pose **on your skeleton** (generate one with
+`tools/gen_my_init_pose.py`). SOMA sources keep `joint_offsets` inline in the scaler
+config and are unaffected.
+
+**Adding a new source / robot pair.** Steps 1–2 are only needed for a brand-new source
+(e.g. `xsens`); to point an existing source like `mydata` at another robot (e.g.
+`g1` / `pm01` / `pi_plus`), skip to step 3 and just add a new
+`_RETARGETER_CONFIG_FILENAME` entry for `(SourceType.MYDATA, "<robot>")`.
+
+1. Register a new source in `soma_retargeter/pipelines/utils.py`: add a `SourceType`, its
+   string in `_SOURCE_TYPE_TO_STR`, and one row in each per-source table (facing
+   direction, position scale, recenter, yaw offset).
+2. Inspect the source once and fill those tables: up-axis (`Mujoco` for Y-up, `Newton`
+   for Z-up), extra unit scale, horizontal recenter, and yaw vs. the robot.
+3. Add a `_RETARGETER_CONFIG_FILENAME` entry for `(SourceType.<SOURCE>, "<robot>")`
+   pointing at a `<source>_to_<robot>_retargeter_config.json`.
+4. Generate the `initialization_pose` on your skeleton with `tools/gen_my_init_pose.py`
+   (point its `SRC` / `OUT` / joint names at your rig).
+5. Author that retargeter config with an `ik_map` keyed by your joint names → this
+   robot's body links, plus starter scaler + offsets configs (`joint_scales` = 1.0,
+   identity `joint_offsets`).
+6. Launch with `--data <source>` against that robot's config, then use the Calibration
+   panel to compute and write the real `joint_scales` / `joint_offsets`.
+
 ## Project layout
 
 | Path | Role |
@@ -163,7 +249,10 @@ Use the GUI calibration panel when tuning a new robot’s scaler config for the 
 | `app/bvh_to_csv_converter.py` | Entry point (GUI + batch) |
 | `soma_retargeter/pipelines/` | Retargeting, IK, feet stabilization |
 | `soma_retargeter/robotics/` | Human-to-robot scaling |
-| `soma_retargeter/configs/` | Per-robot scaler / retargeter JSON |
+| `soma_retargeter/configs/<robot>/<source>/` | Retargeter / scaler / offsets JSON for each `<source>_to_<robot>` pair |
+| `soma_retargeter/configs/<robot>/` | Robot-level config (e.g. `<robot>_feet_stabilizer_config.json`) shared across sources |
+| `soma_retargeter/configs/sources/` | Per-source skeleton assets (SOMA mesh + zero/T-pose, native init poses) |
+| `tools/reference_poses/` | Per-robot calibration reference-pose JSON |
 | `soma_retargeter/renderers/` | Viewer drawing helpers |
 | `assets/robots/` | Robot MJCF / meshes |
 
