@@ -82,6 +82,14 @@ class NewtonPipeline:
             io_utils.get_config_file(retargeter_config['human_robot_scaler_config']),
             offsets_file=offsets_file)
 
+        # Per-axis motion-amplitude scale of the root trajectory (x, y, z).
+        # (1, 1, 1) reproduces the default equal/identity behaviour; set via
+        # set_amplitude_scale to e.g. shrink a 1.5 m climb onto a 1 m box.
+        # amplitude_full toggles full-body scaling (scales hands/feet too, may
+        # cause foot slip/drift) vs the default root-only (no slip/no distortion).
+        self.amplitude_scale = wp.vec3(1.0, 1.0, 1.0)
+        self.amplitude_full = False
+
         self.num_body_count = self.robot_builder.body_count
         self.num_dofs = self.robot_builder.joint_dof_count
         self.ik_model = self._build_model(1)
@@ -120,7 +128,22 @@ class NewtonPipeline:
                 io_utils.get_config_file(retargeter_config['initialization_pose']),
                 position_scale=init_pose_scale, recenter_xy=init_pose_recenter)
             self.initialization_pose = SkeletonInstance(init_skel, [0, 0, 0], wp.transform_identity())
-            self.initialization_pose.set_local_transforms(init_anim.get_local_transforms(0))
+            init_local0 = init_anim.get_local_transforms(0)
+            self.initialization_pose.set_local_transforms(init_local0)
+            # Root joint (index 0) local translation is its world position (no
+            # parent), in the same scaled units the runtime motion is loaded with;
+            # use it as the standing reference for root-only amplitude scaling.
+            self.human_robot_scaler.set_amplitude_reference(init_local0[0][0:3])
+            # Standing effector positions are the reference for full-body scaling.
+            # Build the instance on the scaler's own skeleton object (the init pose
+            # shares the source's joint structure) so the effector computation's
+            # skeleton-identity check passes.
+            ref_instance = SkeletonInstance(
+                self.human_robot_scaler.skeleton, [0, 0, 0], wp.transform_identity())
+            ref_instance.set_local_transforms(init_local0)
+            ref_effectors = self.human_robot_scaler.compute_effectors_from_skeleton(
+                ref_instance, True)
+            self.human_robot_scaler.set_effector_reference(ref_effectors[:, 0:3])
             self.num_initialization_frames = retargeter_config.get('num_initialization_frames', _DEFAULT_NUM_INITIALIZATION_FRAMES)
             self.num_stabilization_frames = retargeter_config.get('num_stabilization_frames', _DEFAULT_NUM_STABILIZATION_FRAMES)
 
@@ -134,6 +157,31 @@ class NewtonPipeline:
         self.input_targets = []
         self.input_sample_rates = []
         self.max_frames = -1
+
+    def set_amplitude_scale(self, x: float, y: float, z: float):
+        """Set the per-axis motion-amplitude scale of the root trajectory.
+
+        Only the root's displacement from its standing reference (initialization
+        pose) is scaled; body pose and proportions are untouched. ``(1, 1, 1)``
+        is the identity. Re-add input motions for the change to take effect.
+
+        Args:
+            x: Scale along world X (lateral motion amplitude).
+            y: Scale along world Y (forward/back motion amplitude).
+            z: Scale along world Z (vertical motion amplitude, e.g. climb height).
+        """
+        self.amplitude_scale = wp.vec3(float(x), float(y), float(z))
+
+    def set_amplitude_full(self, full: bool):
+        """Toggle full-body vs root-only motion-amplitude scaling.
+
+        Args:
+            full: If True, scale every effector's displacement from its standing
+                reference (scales hands/feet too; may cause foot slip/drift). If
+                False (default), scale only the root trajectory, leaving body
+                pose/proportions untouched. Re-add input motions to take effect.
+        """
+        self.amplitude_full = bool(full)
 
     def add_input_motions(self, buffers: list[AnimationBuffer], offsets: list[wp.transform], scale_animation: bool):
         """
@@ -156,7 +204,9 @@ class NewtonPipeline:
                     self.initialization_pose, buffers[i], self.num_initialization_frames, self.num_stabilization_frames)
 
             self.max_frames = max(self.max_frames, buffer.num_frames)
-            buffer_effectors = self.human_robot_scaler.compute_effectors_from_buffer(buffer, scale_animation, offsets[i])
+            buffer_effectors = self.human_robot_scaler.compute_effectors_from_buffer(
+                buffer, scale_animation, offsets[i],
+                amplitude_scale=self.amplitude_scale, full_body=self.amplitude_full)
 
             self.input_targets.append(buffer_effectors[:, self.target_effector_indices, :])
             self.input_sample_rates.append(buffers[i].sample_rate)

@@ -79,6 +79,13 @@ class Viewer:
         self.retarget_solver_idx     = 0
         self.retarget_source_idx     = self.retarget_source_options.index(self.source_str)
 
+        # Per-axis motion-amplitude scale (x, y, z) for the root trajectory.
+        # (1, 1, 1) == default equal scaling; tweak e.g. z to fit a 1.5 m climb
+        # onto a 1 m box without changing body pose/proportions.
+        # amplitude_full_body: scale hands/feet too (may slip/drift) vs root-only.
+        self.amplitude_scale = [1.0, 1.0, 1.0]
+        self.amplitude_full_body = False
+
         # Resolve currently selected robot from config (falls back to G1).
         self.robot_type = self.config.get('retarget_target', 'unitree_g1')
         if self.robot_type not in self.retarget_target_options:
@@ -449,6 +456,8 @@ class Viewer:
         else:
             raise(ValueError(f"[ERROR]: Unknown retargeter solver [{retarget_solver}"))
         
+        pipeline.set_amplitude_scale(*self.amplitude_scale)
+        pipeline.set_amplitude_full(self.amplitude_full_body)
         r_offsets = [wp.transform(wp.vec3(0,0,0), wp.quat(*s.xform[3:7])) for s in self.skeleton_instances]
         pipeline.add_input_motions(self.animation_buffers, r_offsets, True)
         buffers = pipeline.execute()
@@ -504,7 +513,26 @@ class Viewer:
             ui.same_line()
             if ui.button("Retarget"):
                 self.retarget_motion()
-            
+
+            ui.spacing()
+            ui.align_text_to_frame_padding()
+            ui.text("Motion Amplitude (root trajectory):")
+            ui.text_disabled("Adjust, then press Retarget to apply.")
+            amp_labels = ("X##ampx", "Y##ampy", "Z##ampz")
+            for axis, label in enumerate(amp_labels):
+                ui.set_next_item_width(220)
+                a_changed, a_val = ui.slider_float(
+                    label, float(self.amplitude_scale[axis]), 0.1, 2.0, "%.2f")
+                if a_changed:
+                    self.amplitude_scale[axis] = a_val
+            ui.same_line()
+            if ui.small_button("Reset##amp"):
+                self.amplitude_scale = [1.0, 1.0, 1.0]
+            f_changed, f_val = ui.checkbox(
+                "Scale full body (hands/feet, may slip/drift)", self.amplitude_full_body)
+            if f_changed:
+                self.amplitude_full_body = f_val
+
             if (len(self.animation_buffers) == 0):
                 ui.end_disabled()
 
@@ -1185,6 +1213,8 @@ class Viewer:
         if retarget_pipeline is None:
             print(f"[ERROR]: Invalid retarget solver selected [{retarget_solver}]. Use 'Newton'.")
             exit(-1)
+        retarget_pipeline.set_amplitude_scale(*self.amplitude_scale)
+        retarget_pipeline.set_amplitude_full(self.amplitude_full_body)
 
         nb_retargeted_motions = 0
         start_time = time.time()

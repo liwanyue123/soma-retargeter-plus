@@ -65,6 +65,41 @@ class HumanToRobotScaler:
             -1 if joint_parents[name] == "" else self.mapped_joints.index(joint_parents[name])
             for name in self.mapped_joints]
 
+        # Standing references for per-axis motion-amplitude scaling, injected by
+        # the pipeline once the init pose is known. Default to origin / zeros,
+        # which (together with amp == (1,1,1)) reproduces the original behaviour.
+        #   ref_root: raw unscaled root world position (root-only mode).
+        #   ref_effectors: standing effector world positions (full-body mode).
+        self.ref_root = wp.vec3(0.0, 0.0, 0.0)
+        self.ref_effectors = wp.array(
+            [wp.vec3(0.0, 0.0, 0.0)] * len(self.mapped_joints), dtype=wp.vec3)
+
+    def set_amplitude_reference(self, root_world_position):
+        """Set the standing root reference for motion-amplitude scaling.
+
+        Args:
+            root_world_position: Raw (unscaled) world position of the root joint
+                in the initialization/standing pose. Amplitude scaling shrinks or
+                grows the root trajectory's displacement from this point.
+        """
+        self.ref_root = wp.vec3(
+            float(root_world_position[0]),
+            float(root_world_position[1]),
+            float(root_world_position[2]))
+
+    def set_effector_reference(self, effector_positions):
+        """Set the standing effector references used by full-body amplitude scaling.
+
+        Args:
+            effector_positions: Iterable of (x, y, z) standing world positions, one
+                per mapped joint (typically the effectors of the initialization
+                pose). Full-body mode scales each effector's displacement from
+                here.
+        """
+        self.ref_effectors = wp.array(
+            [wp.vec3(float(p[0]), float(p[1]), float(p[2])) for p in effector_positions],
+            dtype=wp.vec3)
+
     def effector_names(self):
         """
         Return the list of mapped joint names used as effectors.
@@ -74,7 +109,7 @@ class HumanToRobotScaler:
         """
         return self.mapped_joints
 
-    def compute_effectors_from_skeleton(self, skeleton_instance: SkeletonInstance, scale_animation: bool):
+    def compute_effectors_from_skeleton(self, skeleton_instance: SkeletonInstance, scale_animation: bool, amplitude_scale: wp.vec3 = None, full_body: bool = False):
         """
         Compute scaled effectors from a single skeleton instance.
 
@@ -115,11 +150,16 @@ class HumanToRobotScaler:
             in_mapped_joint_scales  : wp.array(dtype=wp.float32),
             in_mapped_joint_offsets : wp.array(dtype=wp.transform),
             in_scale_animation      : wp.bool,
+            in_amp_scale            : wp.vec3,
+            in_ref_root             : wp.vec3,
+            in_ref_effectors        : wp.array(dtype=wp.vec3),
+            in_full_scale           : wp.bool,
             out_result              : wp.array(dtype=wp.transform)
         ):
             HumanToRobotScaler.wp_compute_scaled_effectors(
                 in_num_mapped_joints, in_global_pose, in_mapped_joint_indices,
-                in_mapped_joint_scales, in_mapped_joint_offsets, in_scale_animation, out_result)
+                in_mapped_joint_scales, in_mapped_joint_offsets, in_scale_animation,
+                in_amp_scale, in_ref_root, in_ref_effectors, in_full_scale, out_result)
 
         wp_global_pose = wp.array([wp.transform_identity()] * skeleton_instance.num_joints, dtype=wp.transform)
         wp.launch(
@@ -132,6 +172,7 @@ class HumanToRobotScaler:
                 wp.array(skeleton_instance.local_transforms, dtype=wp.transform)],
                 outputs=[wp_global_pose])
 
+        amp = amplitude_scale if amplitude_scale is not None else wp.vec3(1.0, 1.0, 1.0)
         wp_effectors = wp.array([wp.transform_identity()] * len(self.mapped_joint_indices), dtype=wp.transform)
         wp.launch(
             compute_scaled_effectors_kernel,
@@ -142,13 +183,17 @@ class HumanToRobotScaler:
                 self.mapped_joint_indices,
                 self.mapped_joint_scales,
                 self.mapped_joint_offsets,
-                scale_animation
+                scale_animation,
+                amp,
+                self.ref_root,
+                self.ref_effectors,
+                full_body
             ],
             outputs=[wp_effectors])
 
         return wp_effectors.numpy()
 
-    def compute_effectors_from_buffer(self, animation_buffer: AnimationBuffer, scale_animation: bool, xform: wp.transform = wp.transform_identity()):
+    def compute_effectors_from_buffer(self, animation_buffer: AnimationBuffer, scale_animation: bool, xform: wp.transform = wp.transform_identity(), amplitude_scale: wp.vec3 = None, full_body: bool = False):
         """
         Compute scaled effectors for all frames in an animation buffer.
 
@@ -191,12 +236,17 @@ class HumanToRobotScaler:
             in_mapped_joint_scales  : wp.array(dtype=wp.float32),
             in_mapped_joint_offsets : wp.array(dtype=wp.transform),
             in_scale_animation      : wp.bool,
+            in_amp_scale            : wp.vec3,
+            in_ref_root             : wp.vec3,
+            in_ref_effectors        : wp.array(dtype=wp.vec3),
+            in_full_scale           : wp.bool,
             out_result              : wp.array2d(dtype=wp.transform)
         ):
             frame_idx = wp.tid()
             HumanToRobotScaler.wp_compute_scaled_effectors(
                in_num_mapped_joints, in_global_pose[frame_idx], in_mapped_joint_indices,
-               in_mapped_joint_scales, in_mapped_joint_offsets, in_scale_animation, out_result[frame_idx])
+               in_mapped_joint_scales, in_mapped_joint_offsets, in_scale_animation,
+               in_amp_scale, in_ref_root, in_ref_effectors, in_full_scale, out_result[frame_idx])
 
         wp_global_poses = wp.empty(shape=(animation_buffer.num_frames, self.skeleton.num_joints), dtype=wp.transform)
         wp.launch(
@@ -209,6 +259,7 @@ class HumanToRobotScaler:
                 wp.array2d(animation_buffer.local_transforms, dtype=wp.transform)],
                 outputs=[wp_global_poses])
 
+        amp = amplitude_scale if amplitude_scale is not None else wp.vec3(1.0, 1.0, 1.0)
         wp_effectors = wp.empty(shape=(animation_buffer.num_frames, len(self.mapped_joint_indices)), dtype=wp.transform)
         wp.launch(
             batched_compute_scaled_effectors_2d_kernel,
@@ -219,7 +270,11 @@ class HumanToRobotScaler:
                 self.mapped_joint_indices,
                 self.mapped_joint_scales,
                 self.mapped_joint_offsets,
-                scale_animation
+                scale_animation,
+                amp,
+                self.ref_root,
+                self.ref_effectors,
+                full_body
             ],
             outputs=[wp_effectors])
 
@@ -269,12 +324,29 @@ class HumanToRobotScaler:
         in_mapped_joint_scales  : wp.array(dtype=wp.float32),
         in_mapped_joint_offsets : wp.array(dtype=wp.transform),
         in_scale_animation      : wp.bool,
+        in_amp_scale            : wp.vec3,
+        in_ref_root             : wp.vec3,
+        in_ref_effectors        : wp.array(dtype=wp.vec3),
+        in_full_scale           : wp.bool,
         out_result              : wp.array(dtype=wp.transform)
     ):
         root_t = in_global_pose[in_mapped_joint_indices[0]].p
 
         scale = wp.where(in_scale_animation, wp.vec3(in_mapped_joint_scales[0]), wp.vec3(1.0, 1.0, in_mapped_joint_scales[0]))
-        scaled_root_t = wp.cw_mul(root_t, scale)
+        # Per-axis MOTION-amplitude scaling.
+        #   root-only (default): scale the root trajectory's displacement from its
+        #     standing reference here; body pose/proportions stay intact (no slip).
+        #   full-body: leave the root un-prescaled here and instead scale each whole
+        #     effector relative to its standing reference at the end of the loop
+        #     (scales hands/feet too -> may introduce foot slip / drift).
+        # amp == (1,1,1) reproduces the original mapped effectors exactly in both
+        # modes, so this is fully backward compatible.
+        mapped_root = wp.cw_mul(root_t, scale)
+        mapped_ref = wp.cw_mul(in_ref_root, scale)
+        scaled_root_t = wp.where(
+            in_full_scale,
+            mapped_root,
+            mapped_ref + wp.cw_mul(mapped_root - mapped_ref, in_amp_scale))
 
         for i in range(in_num_mapped_joints):
             idx = in_mapped_joint_indices[i]
@@ -285,5 +357,9 @@ class HumanToRobotScaler:
             geocentric_scaled_t = wp.cw_mul((pose_tx.p - root_t), scale)
 
             q = wp.mul(pose_tx.q, offset_tx.q)
-            t = geocentric_scaled_t + scaled_root_t + wp.quat_rotate(q, offset_tx.p)
+            base_t = geocentric_scaled_t + scaled_root_t + wp.quat_rotate(q, offset_tx.p)
+            t = wp.where(
+                in_full_scale,
+                in_ref_effectors[i] + wp.cw_mul(base_t - in_ref_effectors[i], in_amp_scale),
+                base_t)
             out_result[i] = wp.transform(t, q)

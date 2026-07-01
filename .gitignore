@@ -19,3 +19,5 @@ imgui.ini
 # otherwise bloat git LFS storage on every commit.
 assets/motions/test-export*/
 /tmp/
+
+selected_sonic
