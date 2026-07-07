@@ -4,6 +4,8 @@
 from enum import IntEnum, auto
 from pathlib import Path
 
+import warp as wp
+
 import soma_retargeter.utils.io_utils as io_utils
 import soma_retargeter.assets.usd as usd_utils
 
@@ -22,6 +24,7 @@ class TargetType(IntEnum):
     ENGINEAI_PM01 = auto()
     HIGHTORQUE_PI_PLUS = auto()
     PNDBOTICS_ADAM_LITE = auto()
+    PNDBOTICS_ADAM_SP = auto()
 
 _SOURCE_TYPE_TO_STR = {
     SourceType.SOMA   : "soma",
@@ -34,6 +37,7 @@ _TARGET_TYPE_TO_STR = {
     TargetType.ENGINEAI_PM01       : "engineai_pm01",
     TargetType.HIGHTORQUE_PI_PLUS  : "hightorque_pi_plus",
     TargetType.PNDBOTICS_ADAM_LITE : "pndbotics_adam_lite",
+    TargetType.PNDBOTICS_ADAM_SP   : "pndbotics_adam_sp",
 }
 _STR_TO_TARGET_TYPE = {s : t for t, s in _TARGET_TYPE_TO_STR.items()}
 
@@ -44,6 +48,16 @@ _ROBOT_MJCF_RELATIVE_PATH = {
     "engineai_pm01":       "pm.xml",
     "hightorque_pi_plus":  "xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml",
     "pndbotics_adam_lite": "adam_lite.xml",
+    "pndbotics_adam_sp":   "adam_sp.xml",
+}
+
+# Initial base Z height (metres) for URDF-based robots. MJCF files encode
+# the base height directly in the worldbody (e.g. <body pos="0 0 0.93">),
+# so they are not listed here. For URDF robots, add_urdf defaults to origin
+# (0, 0, 0), so we supply the standing height via the xform argument to
+# avoid the robot spawning inside the ground.
+_ROBOT_URDF_INITIAL_BASE_Z = {
+    # (no URDF-based robots currently; add entries here if needed)
 }
 
 # Per-robot retargeter config filename under
@@ -55,11 +69,13 @@ _RETARGETER_CONFIG_FILENAME = {
     (SourceType.SOMA, "engineai_pm01"):       "soma/soma_to_pm01_retargeter_config.json",
     (SourceType.SOMA, "hightorque_pi_plus"):  "soma/soma_to_pi_plus_retargeter_config.json",
     (SourceType.SOMA, "pndbotics_adam_lite"): "soma/soma_to_adam_lite_retargeter_config.json",
+    (SourceType.SOMA, "pndbotics_adam_sp"):   "soma/soma_to_adam_sp_retargeter_config.json",
     # Native skeleton (route A): retarget straight from your own joint names.
     (SourceType.MYDATA, "unitree_g1"):          "mydata/mydata_to_g1_retargeter_config.json",
     (SourceType.MYDATA, "engineai_pm01"):       "mydata/mydata_to_pm01_retargeter_config.json",
     (SourceType.MYDATA, "hightorque_pi_plus"):  "mydata/mydata_to_pi_plus_retargeter_config.json",
     (SourceType.MYDATA, "pndbotics_adam_lite"): "mydata/mydata_to_adam_lite_retargeter_config.json",
+    (SourceType.MYDATA, "pndbotics_adam_sp"):   "mydata/mydata_to_adam_sp_retargeter_config.json",
 }
 
 
@@ -103,6 +119,28 @@ def get_robot_mjcf_path(robot_type: str) -> Path:
         )
     print(f"[INFO]: Using Newton built-in MJCF for [{robot_type}]: {fallback}")
     return fallback
+
+
+def add_robot_model(builder, robot_type: str) -> None:
+    """Add a robot's model to a Newton ``ModelBuilder``, dispatching on file type.
+
+    Most robots ship as MJCF (``add_mjcf``). URDF robots are also supported
+    via ``add_urdf``; for those the initial base Z is looked up from
+    ``_ROBOT_URDF_INITIAL_BASE_Z`` and passed as ``xform`` to avoid spawning
+    inside the ground plane (MJCF encodes the base height in the worldbody
+    directly, so no extra handling is needed).
+
+    Args:
+        builder: Newton ``ModelBuilder`` to add the robot to.
+        robot_type: Robot type string (e.g. ``"pndbotics_adam_sp"``).
+    """
+    path = str(get_robot_mjcf_path(robot_type))
+    if path.lower().endswith(".urdf"):
+        base_z = _ROBOT_URDF_INITIAL_BASE_Z.get(robot_type, 0.0)
+        xform = wp.transform((0.0, 0.0, base_z), wp.quat_identity())
+        builder.add_urdf(path, floating=True, xform=xform)
+    else:
+        builder.add_mjcf(path)
 
 
 # Per-source coordinate convention + unit scale defaults. SOMA mocap is Y-up

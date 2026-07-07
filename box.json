@@ -1,0 +1,32 @@
+{
+    "_comment": "Scene objects saved from BVH to CSV Converter.",
+    "next_id": 1,
+    "objects": [
+        {
+            "id": 0,
+            "name": "Cube 0",
+            "type": "box",
+            "size": [
+                1.0,
+                1.0,
+                1.0
+            ],
+            "position": [
+                1.0,
+                1.3958654403686523,
+                0.5
+            ],
+            "quat_xyzw": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "color": [
+                0.8999999761581421,
+                0.44999998807907104,
+                0.15000000596046448
+            ]
+        }
+    ]
+}

@@ -33,8 +33,7 @@ class FeetStabilizer:
         pipeline_utils.get_target_type_from_str(self.robot_type)
 
         self.robot_builder = newton.ModelBuilder()
-        self.robot_builder.add_mjcf(
-            str(pipeline_utils.get_robot_mjcf_path(self.robot_type)))
+        pipeline_utils.add_robot_model(self.robot_builder, self.robot_type)
 
         self.num_body_count = self.robot_builder.body_count
         self.ik_model = self._build_model(1)

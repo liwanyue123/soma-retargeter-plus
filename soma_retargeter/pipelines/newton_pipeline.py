@@ -72,8 +72,7 @@ class NewtonPipeline:
         target_str = pipeline_utils.get_target_str_from_type(self.target_type)
 
         self.robot_builder = newton.ModelBuilder()
-        self.robot_builder.add_mjcf(
-            str(pipeline_utils.get_robot_mjcf_path(target_str)))
+        pipeline_utils.add_robot_model(self.robot_builder, target_str)
 
         offsets_cfg = retargeter_config.get('joint_offsets_config')
         offsets_file = io_utils.get_config_file(offsets_cfg) if offsets_cfg else None

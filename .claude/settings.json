@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk '/MOTION/{exit} {print}' selected_sonic/cartwheel_R_003__A235.bvh)",
+      "Bash(awk '/MOTION/{exit} {print}' my_data/man_pabox_B_001.bvh)",
+      "Bash(python3 -c \"import json;d=json.load\\(open\\('soma_retargeter/configs/hightorque_pi_plus/soma_to_pi_plus_retargeter_config.json'\\)\\);print\\(json.dumps\\(d,indent=1\\)[:2500]\\)\")",
+      "Bash(awk 'NR<=12' my_data/man_pabox_B_001.bvh)",
+      "Bash(awk '/Frame Time/{getline; print substr\\($0,1,120\\); exit}' my_data/man_pabox_B_001.bvh)",
+      "Bash(awk 'NR<=12' selected_sonic/cartwheel_R_003__A235.bvh)",
+      "Bash(awk 'NR<=8 || /MOTION/{print} /Frame Time/{print; getline; print substr\\($0,1,80\\); exit}' soma_retargeter/configs/soma/soma_zero_frame0.bvh)",
+      "Bash(python3 -c \"import json;d=json.load\\(open\\('assets/pi_plus_bvh_to_csv_converter_config.json'\\)\\);print\\(json.dumps\\(d,indent=1\\)\\)\")",
+      "Bash(awk '/MOTION/{exit}{print}' soma_retargeter/configs/soma/soma_zero_frame0.bvh)",
+      "Read(//home/wayne/Downloads/blender-5.1.1-linux-x64/**)",
+      "Bash(curl -s https://download.blender.org/release/Blender4.2/)",
+      "Read(//home/wayne/Downloads/**)",
+      "Bash(curl -# -O https://download.blender.org/release/Blender4.2/blender-4.2.9-linux-x64.tar.xz)",
+      "Bash(tar -xf blender-4.2.9-linux-x64.tar.xz)",
+      "Read(//home/wayne/Downloads/blender-4.2.9-linux-x64/**)",
+      "Read(//home/wayne/Downloads/blender-4.2.9-linux-x64/4.2/python/bin/**)",
+      "Read(//home/wayne/.config/blender/5.1/scripts/addons/rokoko-studio-live-blender-1-4-3/**)",
+      "Bash(python3 -c ' *)",
+      "Read(//home/wayne/anaconda3/**)",
+      "Read(//home/wayne/**)",
+      "Bash(~/miniconda3/envs/soma-retargeter/bin/python -c ' *)",
+      "Bash(~/miniconda3/envs/soma-retargeter/bin/python /tmp/claude-1000/-home-wayne-soma-retargeter-plus/dd38df9e-8e09-4c6b-9a70-9a7b551c9b66/scratchpad/gen_tpose2.py)",
+      "Bash(~/miniconda3/envs/soma-retargeter/bin/python /tmp/claude-1000/-home-wayne-soma-retargeter-plus/dd38df9e-8e09-4c6b-9a70-9a7b551c9b66/scratchpad/adapter.py my_data/man_pabox_B_001.bvh my_data/man_pabox_B_001_soma.bvh)",
+      "Bash(~/miniconda3/envs/soma-retargeter/bin/python tools/gen_soma_tpose.py)",
+      "Bash(~/miniconda3/envs/soma-retargeter/bin/python tools/retarget_to_soma.py my_data/man_pabox_B_001.bvh /tmp/st.bvh --selftest)",
+      "Bash(~/miniconda3/envs/soma-retargeter/bin/python tools/retarget_to_soma.py my_data/man_pabox_B_001.bvh my_data/man_pabox_B_001_soma.bvh)"
+    ]
+  }
+}

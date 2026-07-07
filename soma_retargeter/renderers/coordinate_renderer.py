@@ -43,8 +43,16 @@ class CoordinateRenderer(BaseRenderer):
         self.axes_ends = wp.zeros(32 * 3, dtype=wp.vec3)
         self.axes_colors = wp.zeros(32 * 3, dtype=wp.vec3)
 
-    def draw(self, viewer, transforms: List[wp.transform], scale: wp.float32, id: wp.int32):
-        """Compute and display axis lines for the given transforms."""
+    def draw(self, viewer, transforms: List[wp.transform], scale: wp.float32, id: wp.int32, width: float = 0.01):
+        """Compute and display axis lines for the given transforms.
+
+        Args:
+            viewer: Newton viewer instance.
+            transforms: List of transforms (one per joint/body).
+            scale: Axis length in world units.
+            id: Unique integer suffix for the viewer path (avoids collisions).
+            width: Line width in world units (default 0.01).
+        """
         dim = 1
         if isinstance(transforms, list) or isinstance(transforms, np.ndarray):
             dim = len(transforms)
@@ -71,7 +79,7 @@ class CoordinateRenderer(BaseRenderer):
 
         name = f"/coordinate_axes{id}"
         self._register_unique_id(name)
-        viewer.log_lines(name, self.axes_starts, self.axes_ends, self.axes_colors)
+        viewer.log_lines(name, self.axes_starts, self.axes_ends, self.axes_colors, width=width)
 
     def clear(self, viewer):
         """Remove all coordinate axes from the viewer."""

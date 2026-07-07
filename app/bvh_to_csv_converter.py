@@ -74,6 +74,7 @@ class Viewer:
             'engineai_pm01',
             'hightorque_pi_plus',
             'pndbotics_adam_lite',
+            'pndbotics_adam_sp',
         ]
         self.retarget_solver_options = ['Newton']
         self.retarget_solver_idx     = 0
@@ -105,8 +106,7 @@ class Viewer:
         self.viewer.register_ui_callback(lambda ui: self.gui(ui), position="free")
 
         self.robot_builder = newton.ModelBuilder()
-        self.robot_builder.add_mjcf(
-            str(pipeline_utils.get_robot_mjcf_path(self.robot_type)))
+        pipeline_utils.add_robot_model(self.robot_builder, self.robot_type)
 
         self.num_robots = 1
         self.robot_offsets = [wp.transform(wp.vec3(0.0, i - (self.num_robots - 1) / 2.0, 0.0), wp.quat_identity()) for i in range(self.num_robots)]
@@ -125,6 +125,8 @@ class Viewer:
         self.robot_default_joint_q_values = self.model.joint_q.numpy()
 
         self.coordinate_renderer = CoordinateRenderer()
+        self.show_ik_map_axes = False
+        self.ik_map_coordinate_renderer = CoordinateRenderer()
         self.skeleton = None
         self.skeleton_renderer = None
         self.skeletal_mesh_renderer = None
@@ -146,6 +148,8 @@ class Viewer:
                 print(f"[WARN]: default_bvh_file not found: {bvh_path}")
 
         self._init_calibration()
+        self._ik_map_body_indices = self._build_ik_map_body_indices()
+        self._ik_map_label_data = []  # [(name, color_u32, (x,y,z)), ...] populated each frame
         self._init_scene_objects()
 
     def _init_scene_objects(self):
@@ -272,6 +276,134 @@ class Viewer:
             "angles": angles,
         }
 
+    def _build_ik_map_body_indices(self):
+        """Return an ordered list of (soma_joint_name, robot_body_name, robot_local_body_idx)
+        for all unique robot bodies referenced in the retargeter's ik_map (t_body / r_body).
+
+        Indices are local to ``self.robot_builder`` (0-based within the robot,
+        not accounting for any ground-plane bodies in the full model).
+
+        Also stores ``self._ik_map_source_joint_names`` — the ordered list of
+        source (SOMA/human) joint names from the ik_map keys, used to overlay
+        coordinate axes on the human skeleton.
+        """
+        ik_map = self._calibration_retargeter_cfg.get('ik_map', {})
+        robot_body_names = [
+            newton_utils.get_name_from_label(lbl)
+            for lbl in self.robot_builder.body_label]
+
+        # Source joint names are the ik_map keys (one per mapped human joint).
+        self._ik_map_source_joint_names = list(ik_map.keys())
+        # Skeleton indices resolved lazily in load_bvh_file once a skeleton is available.
+        self._ik_map_source_joint_indices = []
+
+        seen = set()
+        result = []
+        for soma_joint, mapping in ik_map.items():
+            # t_body and r_body are often the same body; deduplicate by body name
+            for key in ('t_body', 'r_body'):
+                body_name = mapping.get(key)
+                if body_name and body_name not in seen:
+                    seen.add(body_name)
+                    if body_name in robot_body_names:
+                        result.append((soma_joint, body_name, robot_body_names.index(body_name)))
+        return result  # list of (soma_joint, robot_body_name, robot_local_body_idx)
+
+    # ImGui U32 colors for IK-map overlay labels (IM_COL32 = (a<<24)|(b<<16)|(g<<8)|r)
+    _IK_LABEL_COLOR_ROBOT  = (220 << 24) | (255 << 16) | (220 << 8) | 120   # light-blue,  robot bodies
+    _IK_LABEL_COLOR_HUMAN  = (220 << 24) | (120 << 16) | (255 << 8) | 255   # light-yellow, human joints
+    _IK_LABEL_COLOR_SHADOW = (160 << 24) | (  0 << 16) | (  0 << 8) |   0   # semi-transparent black
+
+    def _render_ik_map_axes(self):
+        """Draw RGB coordinate frames for every body referenced in the IK map.
+
+        Renders two sets of axes:
+        - Robot bodies: read from ``self.state.body_q`` after FK evaluation.
+        - Human skeleton joints: read from each skeleton instance's global transforms,
+          filtered to the source joints listed in the ik_map.
+
+        Also caches ``self._ik_map_label_data`` with world positions so that
+        ``_draw_ik_map_labels()`` (called from the ImGui callback) can overlay
+        text without re-computing transforms.
+        """
+        label_data = []
+
+        # --- Robot body axes ---
+        robot_transforms = []
+        if self._ik_map_body_indices:
+            body_q = self.state.body_q.numpy()   # shape: (total_model_bodies, 7)
+            robot_body_count = self.robot_builder.body_count
+            # Ground-plane bodies come first in self.model (added before robots in __init__).
+            # Offset = total bodies - robot bodies across all articulations.
+            body_offset = self.model.body_count - self.num_robots * robot_body_count
+
+            for robot_idx in range(self.num_robots):
+                base = body_offset + robot_idx * robot_body_count
+                for _, robot_body_name, local_idx in self._ik_map_body_indices:
+                    t = body_q[base + local_idx]
+                    robot_transforms.append(wp.transform(wp.vec3(*t[0:3]), wp.quat(*t[3:7])))
+                    label_data.append((robot_body_name, self._IK_LABEL_COLOR_ROBOT, (t[0], t[1], t[2])))
+
+        if robot_transforms:
+            self.ik_map_coordinate_renderer.draw(self.viewer, robot_transforms, 0.15, 998, width=0.008)
+
+        # --- Human skeleton axes ---
+        if (not self.calibration_mode
+                and self._ik_map_source_joint_indices
+                and len(self.skeleton_instances) > 0):
+            for i, skel_inst in enumerate(self.skeleton_instances):
+                # Temporarily apply animation offset (mirrors what render() does).
+                prev_xform = wp.transform(skel_inst.xform)
+                skel_inst.xform = wp.mul(self.animation_offsets[i], skel_inst.xform)
+                all_tx = skel_inst.compute_global_transforms()
+                skel_inst.xform = prev_xform
+
+                selected = [all_tx[idx] for idx in self._ik_map_source_joint_indices]
+                if selected:
+                    self.ik_map_coordinate_renderer.draw(self.viewer, selected, 0.1, 9000 + i, width=0.006)
+
+                # Cache human label positions (use the ik_map key names in order)
+                for joint_name, idx in zip(self._ik_map_source_joint_names, self._ik_map_source_joint_indices):
+                    t = all_tx[idx]
+                    label_data.append((joint_name, self._IK_LABEL_COLOR_HUMAN, (t[0], t[1], t[2])))
+
+        self._ik_map_label_data = label_data
+
+    def _draw_ik_map_labels(self, ui):
+        """Overlay text labels for IK-map coordinate frames using ImGui's foreground draw list.
+
+        Projects each cached world position (from ``_ik_map_label_data``) to screen
+        space using the viewer camera's view/projection matrices, then draws the body
+        or joint name with a drop-shadow for readability.
+        """
+        camera = getattr(self.viewer, 'camera', None)
+        if camera is None or not self._ik_map_label_data:
+            return
+
+        # Pyglet's Mat4 is stored column-major; np.reshape(4,4) gives M_math^T.
+        # To project: clip_row = p_row @ V_np @ P_np  (equivalent to P_math @ V_math @ p_col).
+        V_np = np.array(camera.get_view_matrix(), dtype=np.float64).reshape(4, 4)
+        P_np = np.array(camera.get_projection_matrix(), dtype=np.float64).reshape(4, 4)
+        W = float(camera.width)
+        H = float(camera.height)
+
+        draw_list = ui.get_foreground_draw_list()
+
+        for name, color, pos in self._ik_map_label_data:
+            p = np.array([pos[0], pos[1], pos[2], 1.0], dtype=np.float64)
+            clip = p @ V_np @ P_np
+            if clip[3] <= 1e-6:
+                continue  # behind or at camera
+            ndc = clip[:3] / clip[3]
+            if abs(ndc[0]) > 1.1 or abs(ndc[1]) > 1.1:
+                continue  # off-screen
+            sx = float((ndc[0] + 1.0) * 0.5 * W)
+            sy = float((1.0 - ndc[1]) * 0.5 * H)
+
+            # Drop shadow (1px offset) then main label
+            draw_list.add_text(ui.ImVec2(sx + 1, sy + 1), self._IK_LABEL_COLOR_SHADOW, name)
+            draw_list.add_text(ui.ImVec2(sx, sy), color, name)
+
     def reset_calibration_pose_to_reference(self):
         """Reset ``self.calibration_joint_q`` to the per-robot reference pose."""
         self.calibration_joint_q = self.robot_default_joint_q_values.astype(np.float32).copy()
@@ -295,6 +427,8 @@ class Viewer:
         self.ui_playback_controls(ui)
         self.ui_scene_options(ui)
         self.ui_right_sidebar(ui)
+        if self.show_ik_map_axes:
+            self._draw_ik_map_labels(ui)
 
     def load_csv_file(self, path):
         self.robot_csv_animation_buffers[0] = csv_utils.load_csv(path, csv_config=self.csv_config)
@@ -314,6 +448,13 @@ class Viewer:
             path, position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy)
         self.skeleton_renderer = SkeletonRenderer(self.skeleton, [0])
         self.skeleton_instances = [SkeletonInstance(self.skeleton, _DEFAULT_COLOR, self.converter.transform(wp.transform_identity()))]
+
+        # Resolve IK-map source joint names to skeleton joint indices.
+        self._ik_map_source_joint_indices = [
+            self.skeleton.joint_index(name)
+            for name in self._ik_map_source_joint_names
+            if self.skeleton.joint_index(name) >= 0
+        ]
         self.animation_offsets = [wp.transform_identity()] * len(self.skeleton_instances)
         self.animation_buffers = [animation]
 
@@ -432,8 +573,12 @@ class Viewer:
                 self.viewer.log_gizmo(f"animation_offset{i}", offset)
 
         self._render_scene_objects()
-        
+
         self.viewer.log_state(self.state)
+
+        if self.show_ik_map_axes:
+            self._render_ik_map_axes()
+
         self.viewer.end_frame()
 
     def run(self):
@@ -585,6 +730,9 @@ class Viewer:
             changed, self.show_skeleton_joint_axes = ui.checkbox("Show Joint Axes", self.show_skeleton_joint_axes)
             if changed and self.coordinate_renderer is not None:
                 self.coordinate_renderer.clear(self.viewer)
+            changed, self.show_ik_map_axes = ui.checkbox("Show IK Map Axes", self.show_ik_map_axes)
+            if changed and not self.show_ik_map_axes:
+                self.ik_map_coordinate_renderer.clear(self.viewer)
             _, self.show_gizmos = ui.checkbox("Show Gizmos", self.show_gizmos)
             ui.same_line()
             if ui.button("Reset"):

@@ -56,7 +56,7 @@ def _load_soma_zero_globals(retargeter_cfg, facing_direction):
 
 def _load_robot_globals(robot_type, ref_data):
     builder = newton.ModelBuilder()
-    builder.add_mjcf(str(pipeline_utils.get_robot_mjcf_path(robot_type)))
+    pipeline_utils.add_robot_model(builder, robot_type)
     model = builder.finalize()
 
     base_pos = ref_data['base_pos']

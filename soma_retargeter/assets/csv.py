@@ -133,11 +133,28 @@ class PNDboticsAdamLite_CSVConfig(_StandardCSVConfig):
         "elbow_Right", "wristYaw_Right"]
 
 
+@dataclass
+class PNDboticsAdamSp_CSVConfig(_StandardCSVConfig):
+    """29-DOF full humanoid by PNDbotics (3-DOF waist, 7-DOF arms w/ 3-DOF wrist)."""
+    name: str = "pndbotics_adam_sp_29dof"
+    csv_header: ClassVar[List[str]] = _ROOT_HEADER + [
+        "hipPitch_Left", "hipRoll_Left", "hipYaw_Left",
+        "kneePitch_Left", "anklePitch_Left", "ankleRoll_Left",
+        "hipPitch_Right", "hipRoll_Right", "hipYaw_Right",
+        "kneePitch_Right", "anklePitch_Right", "ankleRoll_Right",
+        "waistRoll", "waistPitch", "waistYaw",
+        "shoulderPitch_Left", "shoulderRoll_Left", "shoulderYaw_Left",
+        "elbow_Left", "wristYaw_Left", "wristPitch_Left", "wristRoll_Left",
+        "shoulderPitch_Right", "shoulderRoll_Right", "shoulderYaw_Right",
+        "elbow_Right", "wristYaw_Right", "wristPitch_Right", "wristRoll_Right"]
+
+
 _ROBOT_CSV_CONFIGS = {
     "unitree_g1":          UnitreeG129DOF_CSVConfig,
     "engineai_pm01":       EngineAIPM01_CSVConfig,
     "hightorque_pi_plus":  HighTorquePiPlus_CSVConfig,
     "pndbotics_adam_lite": PNDboticsAdamLite_CSVConfig,
+    "pndbotics_adam_sp":   PNDboticsAdamSp_CSVConfig,
 }
 
 

@@ -17,8 +17,11 @@ The pipeline applies human-to-robot scaling, multi-objective IK with joint limit
 | `engineai_pm01` | `assets/pm01_bvh_to_csv_converter_config.json` | EngineAI PM01 (24 DOF) |
 | `hightorque_pi_plus` | `assets/pi_plus_bvh_to_csv_converter_config.json` | Hightorque Pi Plus (20 DOF) |
 | `pndbotics_adam_lite` | `assets/adam_lite_bvh_to_csv_converter_config.json` | PND Adam Lite (25 DOF) |
+| `pndbotics_adam_sp` | `assets/adam_sp_bvh_to_csv_converter_config.json` | PND Adam SP (29 DOF; 3-DOF waist, 7-DOF arms) |
 
 Set `retarget_target` in the config JSON, or pick the matching config file on the command line.
+
+> `pndbotics_adam_sp` ships as a URDF (loaded via Newton's `add_urdf`); all others are MJCF. Loading its `.dae` meshes needs `pycollada` (`pip install pycollada`).
 
 ## Requirements
 
@@ -95,6 +98,7 @@ Other robots — same command, different config:
 python app/bvh_to_csv_converter.py --config assets/pm01_bvh_to_csv_converter_config.json --viewer gl
 python app/bvh_to_csv_converter.py --config assets/pi_plus_bvh_to_csv_converter_config.json --viewer gl
 python app/bvh_to_csv_converter.py --config assets/adam_lite_bvh_to_csv_converter_config.json --viewer gl
+python app/bvh_to_csv_converter.py --config assets/adam_sp_bvh_to_csv_converter_config.json --viewer gl
 ```
 
 To retarget your own (non-SOMA) skeleton directly, add `--data <source>` — see [Custom (non-SOMA) data](#custom-non-soma-data).
@@ -189,6 +193,12 @@ python app/bvh_to_csv_converter.py \
   --config assets/adam_lite_bvh_to_csv_converter_config.json \
   --viewer gl \
   --data mydata
+
+# PND Adam SP
+python app/bvh_to_csv_converter.py \
+  --config assets/adam_sp_bvh_to_csv_converter_config.json \
+  --viewer gl \
+  --data mydata
 ```
 
 `--data <source>` switches the pipeline to a registered non-SOMA source. The source's
@@ -200,10 +210,11 @@ source is mostly a matter of filling in tables + JSON configs.
 
 > **Each `--data` source is wired up per robot.** Every `(source, robot)` pair has its own
 > entry in `_RETARGETER_CONFIG_FILENAME` plus a matching `ik_map` / scaler / offsets /
-> init-pose config. `mydata` ships with starter configs for all four robots above, but
+> init-pose config. `mydata` ships with starter configs for all five robots above, but
 > their `joint_scales` / `joint_offsets` are still neutral placeholders — run the in-app
 > **Calibration** panel once per robot to fill in real values (Adam Lite is already
-> calibrated). To add another robot or a brand-new source, see
+> calibrated; Adam SP's `mydata` configs are copied from Adam Lite and still need a
+> calibration pass). To add another robot or a brand-new source, see
 > [Adding a new source/robot pair](#custom-non-soma-data) below.
 
 **Config split per source.** Configs live under `configs/<robot>/<source>/` (e.g.
@@ -254,7 +265,7 @@ config and are unaffected.
 | `soma_retargeter/configs/sources/` | Per-source skeleton assets (SOMA mesh + zero/T-pose, native init poses) |
 | `tools/reference_poses/` | Per-robot calibration reference-pose JSON |
 | `soma_retargeter/renderers/` | Viewer drawing helpers |
-| `assets/robots/` | Robot MJCF / meshes |
+| `assets/robots/` | Robot MJCF / URDF / meshes |
 
 ## Related work
 
