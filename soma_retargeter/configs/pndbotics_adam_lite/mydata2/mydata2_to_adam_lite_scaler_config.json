@@ -1,0 +1,38 @@
+{
+    "_comment": "STARTER scaler config for mydata2 -> pndbotics_adam_lite. mydata2 spine: Hips->Spine->Spine1->Neck (no Spine3). joint_scales are 1.0 and must be calibrated via the in-app Calibration panel.",
+    "robot_type": "pndbotics_adam_lite",
+    "human_root_name": "Hips",
+    "human_height_assumption": 1.8,
+    "joint_scales": {
+        "Hips": 0.9902,
+        "Spine1": 0.5813,
+        "LeftUpLeg": 1.7202,
+        "RightUpLeg": 1.7202,
+        "LeftLeg": 1.1139,
+        "RightLeg": 1.1128,
+        "LeftFoot": 1.0253,
+        "RightFoot": 1.0249,
+        "LeftArm": 0.9828,
+        "RightArm": 0.982,
+        "LeftForeArm": 1.1327,
+        "RightForeArm": 1.1297,
+        "LeftHand": 0.8062,
+        "RightHand": 0.804
+    },
+    "joint_parents": {
+        "Hips": "",
+        "Spine1": "Hips",
+        "LeftUpLeg": "Hips",
+        "RightUpLeg": "Hips",
+        "LeftLeg": "LeftUpLeg",
+        "RightLeg": "RightUpLeg",
+        "LeftFoot": "LeftLeg",
+        "RightFoot": "RightLeg",
+        "LeftArm": "Spine1",
+        "RightArm": "Spine1",
+        "LeftForeArm": "LeftArm",
+        "RightForeArm": "RightArm",
+        "LeftHand": "LeftForeArm",
+        "RightHand": "RightForeArm"
+    }
+}

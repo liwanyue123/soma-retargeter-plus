@@ -16,6 +16,10 @@ class SourceType(IntEnum):
     # Native (non-SOMA) source skeleton. Selected via `--data mydata`; uses your
     # own joint names + a dedicated retargeter config, with no SOMA skin mesh.
     MYDATA = auto()
+    # Second native skeleton variant. Same coordinate conventions as MYDATA but
+    # with its own calibration configs (scaler / offsets) so the two datasets
+    # can be retargeted independently. Selected via `--data mydata2`.
+    MYDATA2 = auto()
 
 
 class TargetType(IntEnum):
@@ -27,8 +31,9 @@ class TargetType(IntEnum):
     PNDBOTICS_ADAM_SP = auto()
 
 _SOURCE_TYPE_TO_STR = {
-    SourceType.SOMA   : "soma",
-    SourceType.MYDATA : "mydata",
+    SourceType.SOMA    : "soma",
+    SourceType.MYDATA  : "mydata",
+    SourceType.MYDATA2 : "mydata2",
 }
 _STR_TO_SOURCE_TYPE = {s : t for t, s in _SOURCE_TYPE_TO_STR.items()}
 
@@ -76,6 +81,12 @@ _RETARGETER_CONFIG_FILENAME = {
     (SourceType.MYDATA, "hightorque_pi_plus"):  "mydata/mydata_to_pi_plus_retargeter_config.json",
     (SourceType.MYDATA, "pndbotics_adam_lite"): "mydata/mydata_to_adam_lite_retargeter_config.json",
     (SourceType.MYDATA, "pndbotics_adam_sp"):   "mydata/mydata_to_adam_sp_retargeter_config.json",
+    # Second native skeleton variant with its own calibration configs.
+    (SourceType.MYDATA2, "unitree_g1"):          "mydata2/mydata2_to_g1_retargeter_config.json",
+    (SourceType.MYDATA2, "engineai_pm01"):       "mydata2/mydata2_to_pm01_retargeter_config.json",
+    (SourceType.MYDATA2, "hightorque_pi_plus"):  "mydata2/mydata2_to_pi_plus_retargeter_config.json",
+    (SourceType.MYDATA2, "pndbotics_adam_lite"): "mydata2/mydata2_to_adam_lite_retargeter_config.json",
+    (SourceType.MYDATA2, "pndbotics_adam_sp"):   "mydata2/mydata2_to_adam_sp_retargeter_config.json",
 }
 
 
@@ -149,24 +160,38 @@ def add_robot_model(builder, robot_type: str) -> None:
 # ~3.16x smaller than cm-scale, so we apply an extra position scale to bring it to
 # real human size (~1.77 m) and keep it consistent with the robot.
 _SOURCE_FACING_DIRECTION = {
-    SourceType.SOMA   : "Mujoco",
-    SourceType.MYDATA : "Newton",
+    SourceType.SOMA    : "Mujoco",
+    SourceType.MYDATA  : "Newton",
+    # mydata2 is a standard Y-up BVH (same convention as SOMA/Mujoco).
+    SourceType.MYDATA2 : "Mujoco",
 }
 _SOURCE_POSITION_SCALE = {
-    SourceType.SOMA   : 1.0,
-    SourceType.MYDATA : 3.16,
+    SourceType.SOMA    : 1.0,
+    SourceType.MYDATA  : 3.16,
+    # mydata2 is a standard centimetre-scale BVH; the built-in ×0.01 already
+    # converts it to metres, so no extra scale factor is needed.
+    SourceType.MYDATA2 : 1.0,
 }
 # SOMA clips are authored at the origin; native clips carry a world offset, so
 # recenter them horizontally to behave the same.
+# NOTE: recenter_xy removes local_transforms[0, 0, 0:2] = [px, py] from the
+# root joint. For Z-up (mydata/Newton) this correctly zeroes the XY horizontal
+# plane while preserving the Z height. For Y-up (mydata2/Mujoco) py IS the
+# height axis, so recentering would snap the hip to Y=0 (ground), burying the
+# lower body. Keep it False for Y-up sources and rely on the space converter to
+# land the character at the right height.
 _SOURCE_RECENTER_XY = {
-    SourceType.SOMA   : False,
-    SourceType.MYDATA : True,
+    SourceType.SOMA    : False,
+    SourceType.MYDATA  : True,
+    SourceType.MYDATA2 : False,
 }
 # Extra yaw (deg, about up axis) to align the source's forward with the robot.
 # mydata is captured back-to-back with the robot, so flip it 180 deg.
+# mydata2 uses the same facing direction as SOMA (no extra flip needed).
 _SOURCE_YAW_OFFSET_DEG = {
-    SourceType.SOMA   : 0.0,
-    SourceType.MYDATA : 180.0,
+    SourceType.SOMA    : 0.0,
+    SourceType.MYDATA  : 180.0,
+    SourceType.MYDATA2 : 0.0,
 }
 
 

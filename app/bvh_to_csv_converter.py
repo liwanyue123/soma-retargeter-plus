@@ -66,7 +66,7 @@ class Viewer:
             'retarget_source_recenter_xy',
             pipeline_utils.get_source_recenter_xy(self.source_type)))
 
-        self.retarget_source_options = ['soma']
+        self.retarget_source_options = ['soma', 'mydata', 'mydata2']
         if self.source_str not in self.retarget_source_options:
             self.retarget_source_options.append(self.source_str)
         self.retarget_target_options = [
@@ -176,6 +176,11 @@ class Viewer:
             self.source_type,
             pipeline_utils.get_target_type_from_str(self.robot_type))
         self._calibration_retargeter_cfg = retargeter_cfg
+        # Path to the retargeter config on disk (so the scale slider can persist).
+        rt_filename = pipeline_utils._RETARGETER_CONFIG_FILENAME.get(
+            (self.source_type, self.robot_type))
+        self._calibration_retargeter_cfg_path = (
+            io_utils.get_config_file(self.robot_type, rt_filename) if rt_filename else None)
 
         scaler_cfg_path = io_utils.get_config_file(retargeter_cfg['human_robot_scaler_config'])
         self._calibration_scaler_cfg_path = scaler_cfg_path
@@ -186,13 +191,29 @@ class Viewer:
             io_utils.get_config_file(offsets_cfg_rel) if offsets_cfg_rel else scaler_cfg_path)
 
         init_bvh = io_utils.get_config_file(retargeter_cfg['initialization_pose'])
+        # By default the init pose loads at the SAME scale/convention as the live
+        # motion (so the zero pose and data are the same size). Optional config
+        # keys still let a retargeter config override the loading parameters and
+        # world-space orientation if an init pose is authored differently.
+        init_pos_scale = retargeter_cfg.get('init_pose_position_scale', self.source_position_scale)
+        init_recenter  = retargeter_cfg.get('init_pose_recenter_xy',    self.source_recenter_xy)
         ref_skel, ref_anim = bvh_utils.load_bvh(
-            init_bvh, position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy)
+            init_bvh, position_scale=init_pos_scale, recenter_xy=init_recenter)
         self.zero_pose_reference_skeleton = ref_skel
         self.zero_pose_reference_local_zero = ref_anim.get_local_transforms(0).copy()
+        # Optional converter override: if the init-pose BVH has a different
+        # coordinate convention than the live source, use a dedicated converter
+        # so the skeleton overlay renders upright in the viewer.
+        init_facing = retargeter_cfg.get('init_pose_facing_direction', None)
+        if init_facing is not None:
+            init_yaw = float(retargeter_cfg.get('init_pose_yaw_offset_deg', 0.0))
+            init_converter = SpaceConverter(
+                get_facing_direction_type_from_str(init_facing), yaw_offset_deg=init_yaw)
+            init_xform = init_converter.transform(wp.transform_identity())
+        else:
+            init_xform = self.converter.transform(wp.transform_identity())
         self.zero_pose_reference_instance = SkeletonInstance(
-            ref_skel, [0.6, 0.7, 1.0],
-            self.converter.transform(wp.transform_identity()))
+            ref_skel, [0.6, 0.7, 1.0], init_xform)
         self.zero_pose_reference_instance.set_local_transforms(self.zero_pose_reference_local_zero)
 
         self.zero_pose_reference_mesh = pipeline_utils.get_source_model_mesh(
@@ -231,6 +252,70 @@ class Viewer:
         self._calibration_status = ""
         self._calibration_last_offsets = None
         self._calibration_last_scales = None
+
+        # A previously-saved slider value (persisted in the retargeter config)
+        # takes effect here: rescale the already-loaded motion + zero pose so the
+        # source starts at the size the user last dialed in.
+        persisted_scale = retargeter_cfg.get('retarget_source_position_scale')
+        if (persisted_scale is not None
+                and abs(float(persisted_scale) - self.source_position_scale) > 1e-9):
+            self._apply_source_scale(float(persisted_scale))
+
+    def _apply_source_scale(self, new_scale):
+        """Rescale the loaded source data (motion + zero-pose reference) in place.
+
+        This drives the calibration 'Source Position Scale' slider: it keeps the
+        zero pose and the motion at the SAME size, updates the viewer live, and
+        invalidates any previously-computed joint_scales/joint_offsets (which are
+        size-dependent). The chosen scale is also what feeds bias computation and
+        the Newton retargeting init pose.
+        """
+        new_scale = float(new_scale)
+        old = float(getattr(self, "source_position_scale", 1.0))
+        if old <= 1e-9 or abs(new_scale - old) < 1e-9:
+            self.source_position_scale = new_scale
+            return
+        ratio = new_scale / old
+
+        # Live motion skeleton + animation buffers.
+        if getattr(self, "skeleton", None) is not None:
+            self.skeleton._reference_local_transforms[..., 0:3] *= ratio
+        for buf in (getattr(self, "animation_buffers", None) or []):
+            if buf is not None:
+                buf.local_transforms[..., 0:3] *= ratio
+
+        # Zero-pose reference (calibration overlay + numeric reference).
+        if getattr(self, "zero_pose_reference_skeleton", None) is not None:
+            self.zero_pose_reference_skeleton._reference_local_transforms[..., 0:3] *= ratio
+        if getattr(self, "zero_pose_reference_local_zero", None) is not None:
+            self.zero_pose_reference_local_zero[..., 0:3] *= ratio
+            if getattr(self, "zero_pose_reference_instance", None) is not None:
+                self.zero_pose_reference_instance.set_local_transforms(
+                    self.zero_pose_reference_local_zero)
+
+        self.source_position_scale = new_scale
+        # Size-dependent calibration results are now stale.
+        self._calibration_last_scales = None
+        self._calibration_last_offsets = None
+        self._calibration_status = (
+            f"Source position scale = {new_scale:.3f}. "
+            "Motion + zero pose rescaled; recompute scales/offsets.")
+
+    def _do_write_source_scale(self):
+        """Persist the current source position scale into the retargeter config."""
+        path = getattr(self, "_calibration_retargeter_cfg_path", None)
+        if path is None:
+            self._calibration_status = "No retargeter config path; cannot save scale."
+            return
+        cfg = io_utils.load_json(path)
+        cfg['retarget_source_position_scale'] = round(float(self.source_position_scale), 6)
+        with open(path, 'w') as f:
+            json.dump(cfg, f, indent=4)
+        self._calibration_retargeter_cfg = cfg
+        self._calibration_status = (
+            f"Saved retarget_source_position_scale = "
+            f"{self.source_position_scale:.3f} to {os.path.basename(str(path))}")
+        print(f"[INFO]: {self._calibration_status}")
 
     def _build_reference_pose(self):
         """Per-robot calibration reference pose.
@@ -435,6 +520,7 @@ class Viewer:
         self.compute_playback_total_time()
 
     def load_bvh_file(self, path):
+        self._loaded_bvh_path = path
         self.animation_buffers = []
         self.skeleton_instances = []
         if self.skeleton_renderer is not None:
@@ -597,7 +683,11 @@ class Viewer:
         
         if (retarget_solver == 'Newton'):
             import soma_retargeter.pipelines.newton_pipeline as newton_pipeline
-            pipeline = newton_pipeline.NewtonPipeline(self.skeleton, retarget_source, retarget_target)
+            # Pass the live source scale so the pipeline's init pose is loaded at
+            # the same size as the (already-scaled) motion buffers we feed it.
+            pipeline = newton_pipeline.NewtonPipeline(
+                self.skeleton, retarget_source, retarget_target,
+                source_position_scale=self.source_position_scale)
         else:
             raise(ValueError(f"[ERROR]: Unknown retargeter solver [{retarget_solver}"))
         
@@ -794,6 +884,20 @@ class Viewer:
             ui.ImVec4(0.6, 0.8, 1.0, 1.0),
             f"Robot: {self.robot_type}   "
             f"Revolute joints: {len(self.calibration_revolute_joints)}")
+
+        ui.separator()
+        ui.text("Source Position Scale (live)")
+        ui.set_next_item_width(200)
+        sc_changed, sc_val = ui.slider_float(
+            "scale##srcscale", float(self.source_position_scale), 0.1, 5.0, "%.3f")
+        if sc_changed:
+            self._apply_source_scale(sc_val)
+        ui.same_line()
+        if ui.button("Save scale to config"):
+            self._do_write_source_scale()
+        ui.text_colored(
+            ui.ImVec4(0.7, 0.7, 0.7, 1.0),
+            "Rescales motion + zero pose together; used for bias + retarget.")
 
         if not self.calibration_mode:
             ui.text_wrapped(
