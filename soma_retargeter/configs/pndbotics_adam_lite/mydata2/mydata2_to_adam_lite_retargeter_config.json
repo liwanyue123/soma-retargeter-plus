@@ -46,8 +46,8 @@
             "r_weight": 0.5
         },
         "LeftHand": {
-            "t_body": "wristYawLeft",
-            "r_body": "wristYawLeft",
+            "t_body": "handLeft",
+            "r_body": "handLeft",
             "t_weight": 2.0,
             "r_weight": 0.5
         },
@@ -64,8 +64,8 @@
             "r_weight": 0.5
         },
         "RightHand": {
-            "t_body": "wristYawRight",
-            "r_body": "wristYawRight",
+            "t_body": "handRight",
+            "r_body": "handRight",
             "t_weight": 2.0,
             "r_weight": 0.5
         },

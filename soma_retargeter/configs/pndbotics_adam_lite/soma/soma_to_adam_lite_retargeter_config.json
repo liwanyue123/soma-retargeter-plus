@@ -38,37 +38,37 @@
             "t_body" : "shoulderRollLeft",
             "r_body" : "shoulderRollLeft",
             "t_weight" : 1.5,
-            "r_weight" : 0.15
+            "r_weight" : 0.0
         },
         "LeftForeArm": {
             "t_body" : "elbowLeft",
             "r_body" : "elbowLeft",
             "t_weight" : 1.0,
-            "r_weight" : 0.5
+            "r_weight" : 0.0
         },
         "LeftHand": {
-            "t_body" : "wristYawLeft",
-            "r_body" : "wristYawLeft",
+            "t_body" : "handLeft",
+            "r_body" : "handLeft",
             "t_weight" : 2.0,
-            "r_weight" : 0.5
+            "r_weight" : 0.0
         },
         "RightArm": {
             "t_body" : "shoulderRollRight",
             "r_body" : "shoulderRollRight",
             "t_weight" : 1.5,
-            "r_weight" : 0.15
+            "r_weight" : 0.0
         },
         "RightForeArm": {
             "t_body" : "elbowRight",
             "r_body" : "elbowRight",
             "t_weight" : 1.0,
-            "r_weight" : 0.5
+            "r_weight" : 0.05
         },
         "RightHand": {
-            "t_body" : "wristYawRight",
-            "r_body" : "wristYawRight",
+            "t_body" : "handRight",
+            "r_body" : "handRight",
             "t_weight" : 2.0,
-            "r_weight" : 0.5
+            "r_weight" : 0.0
         },
         "LeftLeg": {
             "t_body" : "hipRollLeft",

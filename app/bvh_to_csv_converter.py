@@ -127,6 +127,13 @@ class Viewer:
         self.coordinate_renderer = CoordinateRenderer()
         self.show_ik_map_axes = False
         self.ik_map_coordinate_renderer = CoordinateRenderer()
+        # Overlay of the IK effector *targets* (where the retargeter asks each
+        # mapped robot body to go). Computed on demand from the live scaler +
+        # offsets config, so it mirrors exactly what retargeting solves for.
+        self.show_effector_targets = False
+        self.effector_target_coordinate_renderer = CoordinateRenderer()
+        self._effector_scaler_cache = {}
+        self._effector_target_status = ""
         self.skeleton = None
         self.skeleton_renderer = None
         self.skeletal_mesh_renderer = None
@@ -297,6 +304,7 @@ class Viewer:
         # Size-dependent calibration results are now stale.
         self._calibration_last_scales = None
         self._calibration_last_offsets = None
+        self._invalidate_effector_scaler()
         self._calibration_status = (
             f"Source position scale = {new_scale:.3f}. "
             "Motion + zero pose rescaled; recompute scales/offsets.")
@@ -489,6 +497,66 @@ class Viewer:
             draw_list.add_text(ui.ImVec2(sx + 1, sy + 1), self._IK_LABEL_COLOR_SHADOW, name)
             draw_list.add_text(ui.ImVec2(sx, sy), color, name)
 
+    def _invalidate_effector_scaler(self):
+        """Drop the cached effector-target scaler so it is rebuilt from the
+        latest scale + on-disk scaler/offsets config on next use."""
+        self._effector_scaler_cache = {}
+
+    def _get_effector_scaler(self, skeleton):
+        """Build/cache a ``HumanToRobotScaler`` for the current retargeter config.
+
+        Keyed by the skeleton object so both the live-motion skeleton and the
+        calibration zero-pose skeleton can be visualized. The cache is cleared
+        whenever the source scale changes or calibration values are written, so
+        the overlay always reflects what retargeting would solve for.
+        """
+        key = id(skeleton)
+        scaler = self._effector_scaler_cache.get(key)
+        if scaler is not None and scaler.skeleton is skeleton:
+            return scaler
+        try:
+            from soma_retargeter.robotics.human_to_robot_scaler import HumanToRobotScaler
+            cfg = self._calibration_retargeter_cfg
+            scaler = HumanToRobotScaler(
+                skeleton,
+                float(cfg['model_height']),
+                self._calibration_scaler_cfg_path,
+                offsets_file=self._calibration_offsets_cfg_path)
+        except Exception as exc:  # noqa: BLE001 - surface build errors in the UI
+            self._effector_target_status = f"effector-target scaler failed: {exc}"
+            print(f"[WARN]: {self._effector_target_status}")
+            scaler = None
+        self._effector_scaler_cache[key] = scaler
+        return scaler
+
+    def _render_effector_targets(self):
+        """Draw RGB coordinate frames at each IK effector *target*.
+
+        Each frame shows where the retargeter wants the mapped robot body to be:
+        orientation = ``source_q * offset.q`` and position = scaled root +
+        scaled geocentric + ``R(q) * offset.p`` (the exact target the IK solver
+        chases). Compare against ``Show IK Map Axes`` (the robot bodies' actual
+        frames) to see the residual the IK has to absorb.
+        """
+        def draw_from_instance(inst, base_id):
+            scaler = self._get_effector_scaler(inst.skeleton)
+            if scaler is None:
+                return
+            eff = scaler.compute_effectors_from_skeleton(inst, True)
+            transforms = [wp.transform(wp.vec3(*t[0:3]), wp.quat(*t[3:7])) for t in eff]
+            if transforms:
+                self.effector_target_coordinate_renderer.draw(
+                    self.viewer, transforms, 0.12, base_id, width=0.01)
+
+        if self.calibration_mode:
+            draw_from_instance(self.zero_pose_reference_instance, 8500)
+        elif len(self.skeleton_instances) > 0:
+            for i, inst in enumerate(self.skeleton_instances):
+                prev_xform = wp.transform(inst.xform)
+                inst.xform = wp.mul(self.animation_offsets[i], inst.xform)
+                draw_from_instance(inst, 8500 + i)
+                inst.xform = prev_xform
+
     def reset_calibration_pose_to_reference(self):
         """Reset ``self.calibration_joint_q`` to the per-robot reference pose."""
         self.calibration_joint_q = self.robot_default_joint_q_values.astype(np.float32).copy()
@@ -529,6 +597,9 @@ class Viewer:
             self.skeletal_mesh_renderer.clear(self.viewer)
         if self.coordinate_renderer is not None:
             self.coordinate_renderer.clear(self.viewer)
+        if self.effector_target_coordinate_renderer is not None:
+            self.effector_target_coordinate_renderer.clear(self.viewer)
+        self._invalidate_effector_scaler()
 
         self.skeleton, animation = bvh_utils.load_bvh(
             path, position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy)
@@ -664,6 +735,9 @@ class Viewer:
 
         if self.show_ik_map_axes:
             self._render_ik_map_axes()
+
+        if self.show_effector_targets:
+            self._render_effector_targets()
 
         self.viewer.end_frame()
 
@@ -823,6 +897,14 @@ class Viewer:
             changed, self.show_ik_map_axes = ui.checkbox("Show IK Map Axes", self.show_ik_map_axes)
             if changed and not self.show_ik_map_axes:
                 self.ik_map_coordinate_renderer.clear(self.viewer)
+            changed, self.show_effector_targets = ui.checkbox("Show Effector Targets", self.show_effector_targets)
+            if changed:
+                # Rebuild from the latest on-disk config each time it's toggled on.
+                self._invalidate_effector_scaler()
+                if not self.show_effector_targets:
+                    self.effector_target_coordinate_renderer.clear(self.viewer)
+            if self.show_effector_targets and self._effector_target_status:
+                ui.text_colored(ui.ImVec4(1.0, 0.6, 0.4, 1.0), self._effector_target_status)
             _, self.show_gizmos = ui.checkbox("Show Gizmos", self.show_gizmos)
             ui.same_line()
             if ui.button("Reset"):
@@ -1361,6 +1443,7 @@ class Viewer:
             offsets_cfg, self._calibration_last_offsets,
             keep_existing_position=keep_pos)
         calibration_utils.write_scaler_config(offsets_cfg, path)
+        self._invalidate_effector_scaler()
         self._calibration_status = f"Wrote offsets to {path}"
         print(f"[INFO]: {self._calibration_status}")
 
@@ -1372,6 +1455,7 @@ class Viewer:
         calibration_utils.merge_scales_into_config(
             scaler_cfg, self._calibration_last_scales)
         calibration_utils.write_scaler_config(scaler_cfg, path)
+        self._invalidate_effector_scaler()
         self._calibration_status = f"Wrote joint_scales to {path}"
         print(f"[INFO]: {self._calibration_status}")
 
