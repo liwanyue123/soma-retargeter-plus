@@ -66,7 +66,7 @@ class Viewer:
             'retarget_source_recenter_xy',
             pipeline_utils.get_source_recenter_xy(self.source_type)))
 
-        self.retarget_source_options = ['soma']
+        self.retarget_source_options = ['soma', 'mydata', 'mydata2']
         if self.source_str not in self.retarget_source_options:
             self.retarget_source_options.append(self.source_str)
         self.retarget_target_options = [
@@ -127,6 +127,13 @@ class Viewer:
         self.coordinate_renderer = CoordinateRenderer()
         self.show_ik_map_axes = False
         self.ik_map_coordinate_renderer = CoordinateRenderer()
+        # Overlay of the IK effector *targets* (where the retargeter asks each
+        # mapped robot body to go). Computed on demand from the live scaler +
+        # offsets config, so it mirrors exactly what retargeting solves for.
+        self.show_effector_targets = False
+        self.effector_target_coordinate_renderer = CoordinateRenderer()
+        self._effector_scaler_cache = {}
+        self._effector_target_status = ""
         self.skeleton = None
         self.skeleton_renderer = None
         self.skeletal_mesh_renderer = None
@@ -176,6 +183,11 @@ class Viewer:
             self.source_type,
             pipeline_utils.get_target_type_from_str(self.robot_type))
         self._calibration_retargeter_cfg = retargeter_cfg
+        # Path to the retargeter config on disk (so the scale slider can persist).
+        rt_filename = pipeline_utils._RETARGETER_CONFIG_FILENAME.get(
+            (self.source_type, self.robot_type))
+        self._calibration_retargeter_cfg_path = (
+            io_utils.get_config_file(self.robot_type, rt_filename) if rt_filename else None)
 
         scaler_cfg_path = io_utils.get_config_file(retargeter_cfg['human_robot_scaler_config'])
         self._calibration_scaler_cfg_path = scaler_cfg_path
@@ -186,13 +198,29 @@ class Viewer:
             io_utils.get_config_file(offsets_cfg_rel) if offsets_cfg_rel else scaler_cfg_path)
 
         init_bvh = io_utils.get_config_file(retargeter_cfg['initialization_pose'])
+        # By default the init pose loads at the SAME scale/convention as the live
+        # motion (so the zero pose and data are the same size). Optional config
+        # keys still let a retargeter config override the loading parameters and
+        # world-space orientation if an init pose is authored differently.
+        init_pos_scale = retargeter_cfg.get('init_pose_position_scale', self.source_position_scale)
+        init_recenter  = retargeter_cfg.get('init_pose_recenter_xy',    self.source_recenter_xy)
         ref_skel, ref_anim = bvh_utils.load_bvh(
-            init_bvh, position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy)
+            init_bvh, position_scale=init_pos_scale, recenter_xy=init_recenter)
         self.zero_pose_reference_skeleton = ref_skel
         self.zero_pose_reference_local_zero = ref_anim.get_local_transforms(0).copy()
+        # Optional converter override: if the init-pose BVH has a different
+        # coordinate convention than the live source, use a dedicated converter
+        # so the skeleton overlay renders upright in the viewer.
+        init_facing = retargeter_cfg.get('init_pose_facing_direction', None)
+        if init_facing is not None:
+            init_yaw = float(retargeter_cfg.get('init_pose_yaw_offset_deg', 0.0))
+            init_converter = SpaceConverter(
+                get_facing_direction_type_from_str(init_facing), yaw_offset_deg=init_yaw)
+            init_xform = init_converter.transform(wp.transform_identity())
+        else:
+            init_xform = self.converter.transform(wp.transform_identity())
         self.zero_pose_reference_instance = SkeletonInstance(
-            ref_skel, [0.6, 0.7, 1.0],
-            self.converter.transform(wp.transform_identity()))
+            ref_skel, [0.6, 0.7, 1.0], init_xform)
         self.zero_pose_reference_instance.set_local_transforms(self.zero_pose_reference_local_zero)
 
         self.zero_pose_reference_mesh = pipeline_utils.get_source_model_mesh(
@@ -231,6 +259,76 @@ class Viewer:
         self._calibration_status = ""
         self._calibration_last_offsets = None
         self._calibration_last_scales = None
+
+        # A previously-saved slider value (persisted in the retargeter config)
+        # takes effect here: rescale the already-loaded motion + zero pose so the
+        # source starts at the size the user last dialed in.
+        persisted_scale = retargeter_cfg.get('retarget_source_position_scale')
+        if (persisted_scale is not None
+                and abs(float(persisted_scale) - self.source_position_scale) > 1e-9):
+            self._apply_source_scale(float(persisted_scale))
+        # At startup the in-memory scale matches the config on disk (nothing to save).
+        self._source_scale_dirty = False
+
+    def _apply_source_scale(self, new_scale):
+        """Rescale the loaded source data (motion + zero-pose reference) in place.
+
+        This drives the calibration 'Source Position Scale' slider: it keeps the
+        zero pose and the motion at the SAME size, updates the viewer live, and
+        invalidates any previously-computed joint_scales/joint_offsets (which are
+        size-dependent). The chosen scale is also what feeds bias computation and
+        the Newton retargeting init pose.
+        """
+        new_scale = float(new_scale)
+        old = float(getattr(self, "source_position_scale", 1.0))
+        if old <= 1e-9 or abs(new_scale - old) < 1e-9:
+            self.source_position_scale = new_scale
+            return
+        ratio = new_scale / old
+
+        # Live motion skeleton + animation buffers.
+        if getattr(self, "skeleton", None) is not None:
+            self.skeleton._reference_local_transforms[..., 0:3] *= ratio
+        for buf in (getattr(self, "animation_buffers", None) or []):
+            if buf is not None:
+                buf.local_transforms[..., 0:3] *= ratio
+
+        # Zero-pose reference (calibration overlay + numeric reference).
+        if getattr(self, "zero_pose_reference_skeleton", None) is not None:
+            self.zero_pose_reference_skeleton._reference_local_transforms[..., 0:3] *= ratio
+        if getattr(self, "zero_pose_reference_local_zero", None) is not None:
+            self.zero_pose_reference_local_zero[..., 0:3] *= ratio
+            if getattr(self, "zero_pose_reference_instance", None) is not None:
+                self.zero_pose_reference_instance.set_local_transforms(
+                    self.zero_pose_reference_local_zero)
+
+        self.source_position_scale = new_scale
+        # Live scale differs from what's persisted in the config until saved.
+        self._source_scale_dirty = True
+        # Size-dependent calibration results are now stale.
+        self._calibration_last_scales = None
+        self._calibration_last_offsets = None
+        self._invalidate_effector_scaler()
+        self._calibration_status = (
+            f"Source position scale = {new_scale:.3f}. "
+            "Motion + zero pose rescaled; recompute scales/offsets.")
+
+    def _do_write_source_scale(self):
+        """Persist the current source position scale into the retargeter config."""
+        path = getattr(self, "_calibration_retargeter_cfg_path", None)
+        if path is None:
+            self._calibration_status = "No retargeter config path; cannot save scale."
+            return
+        cfg = io_utils.load_json(path)
+        cfg['retarget_source_position_scale'] = round(float(self.source_position_scale), 6)
+        with open(path, 'w') as f:
+            json.dump(cfg, f, indent=4)
+        self._calibration_retargeter_cfg = cfg
+        self._source_scale_dirty = False
+        self._calibration_status = (
+            f"Saved retarget_source_position_scale = "
+            f"{self.source_position_scale:.3f} to {os.path.basename(str(path))}")
+        print(f"[INFO]: {self._calibration_status}")
 
     def _build_reference_pose(self):
         """Per-robot calibration reference pose.
@@ -404,6 +502,66 @@ class Viewer:
             draw_list.add_text(ui.ImVec2(sx + 1, sy + 1), self._IK_LABEL_COLOR_SHADOW, name)
             draw_list.add_text(ui.ImVec2(sx, sy), color, name)
 
+    def _invalidate_effector_scaler(self):
+        """Drop the cached effector-target scaler so it is rebuilt from the
+        latest scale + on-disk scaler/offsets config on next use."""
+        self._effector_scaler_cache = {}
+
+    def _get_effector_scaler(self, skeleton):
+        """Build/cache a ``HumanToRobotScaler`` for the current retargeter config.
+
+        Keyed by the skeleton object so both the live-motion skeleton and the
+        calibration zero-pose skeleton can be visualized. The cache is cleared
+        whenever the source scale changes or calibration values are written, so
+        the overlay always reflects what retargeting would solve for.
+        """
+        key = id(skeleton)
+        scaler = self._effector_scaler_cache.get(key)
+        if scaler is not None and scaler.skeleton is skeleton:
+            return scaler
+        try:
+            from soma_retargeter.robotics.human_to_robot_scaler import HumanToRobotScaler
+            cfg = self._calibration_retargeter_cfg
+            scaler = HumanToRobotScaler(
+                skeleton,
+                float(cfg['model_height']),
+                self._calibration_scaler_cfg_path,
+                offsets_file=self._calibration_offsets_cfg_path)
+        except Exception as exc:  # noqa: BLE001 - surface build errors in the UI
+            self._effector_target_status = f"effector-target scaler failed: {exc}"
+            print(f"[WARN]: {self._effector_target_status}")
+            scaler = None
+        self._effector_scaler_cache[key] = scaler
+        return scaler
+
+    def _render_effector_targets(self):
+        """Draw RGB coordinate frames at each IK effector *target*.
+
+        Each frame shows where the retargeter wants the mapped robot body to be:
+        orientation = ``source_q * offset.q`` and position = scaled root +
+        scaled geocentric + ``R(q) * offset.p`` (the exact target the IK solver
+        chases). Compare against ``Show IK Map Axes`` (the robot bodies' actual
+        frames) to see the residual the IK has to absorb.
+        """
+        def draw_from_instance(inst, base_id):
+            scaler = self._get_effector_scaler(inst.skeleton)
+            if scaler is None:
+                return
+            eff = scaler.compute_effectors_from_skeleton(inst, True)
+            transforms = [wp.transform(wp.vec3(*t[0:3]), wp.quat(*t[3:7])) for t in eff]
+            if transforms:
+                self.effector_target_coordinate_renderer.draw(
+                    self.viewer, transforms, 0.12, base_id, width=0.01)
+
+        if self.calibration_mode:
+            draw_from_instance(self.zero_pose_reference_instance, 8500)
+        elif len(self.skeleton_instances) > 0:
+            for i, inst in enumerate(self.skeleton_instances):
+                prev_xform = wp.transform(inst.xform)
+                inst.xform = wp.mul(self.animation_offsets[i], inst.xform)
+                draw_from_instance(inst, 8500 + i)
+                inst.xform = prev_xform
+
     def reset_calibration_pose_to_reference(self):
         """Reset ``self.calibration_joint_q`` to the per-robot reference pose."""
         self.calibration_joint_q = self.robot_default_joint_q_values.astype(np.float32).copy()
@@ -435,6 +593,7 @@ class Viewer:
         self.compute_playback_total_time()
 
     def load_bvh_file(self, path):
+        self._loaded_bvh_path = path
         self.animation_buffers = []
         self.skeleton_instances = []
         if self.skeleton_renderer is not None:
@@ -443,6 +602,9 @@ class Viewer:
             self.skeletal_mesh_renderer.clear(self.viewer)
         if self.coordinate_renderer is not None:
             self.coordinate_renderer.clear(self.viewer)
+        if self.effector_target_coordinate_renderer is not None:
+            self.effector_target_coordinate_renderer.clear(self.viewer)
+        self._invalidate_effector_scaler()
 
         self.skeleton, animation = bvh_utils.load_bvh(
             path, position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy)
@@ -579,6 +741,9 @@ class Viewer:
         if self.show_ik_map_axes:
             self._render_ik_map_axes()
 
+        if self.show_effector_targets:
+            self._render_effector_targets()
+
         self.viewer.end_frame()
 
     def run(self):
@@ -597,7 +762,11 @@ class Viewer:
         
         if (retarget_solver == 'Newton'):
             import soma_retargeter.pipelines.newton_pipeline as newton_pipeline
-            pipeline = newton_pipeline.NewtonPipeline(self.skeleton, retarget_source, retarget_target)
+            # Pass the live source scale so the pipeline's init pose is loaded at
+            # the same size as the (already-scaled) motion buffers we feed it.
+            pipeline = newton_pipeline.NewtonPipeline(
+                self.skeleton, retarget_source, retarget_target,
+                source_position_scale=self.source_position_scale)
         else:
             raise(ValueError(f"[ERROR]: Unknown retargeter solver [{retarget_solver}"))
         
@@ -733,6 +902,14 @@ class Viewer:
             changed, self.show_ik_map_axes = ui.checkbox("Show IK Map Axes", self.show_ik_map_axes)
             if changed and not self.show_ik_map_axes:
                 self.ik_map_coordinate_renderer.clear(self.viewer)
+            changed, self.show_effector_targets = ui.checkbox("Show Effector Targets", self.show_effector_targets)
+            if changed:
+                # Rebuild from the latest on-disk config each time it's toggled on.
+                self._invalidate_effector_scaler()
+                if not self.show_effector_targets:
+                    self.effector_target_coordinate_renderer.clear(self.viewer)
+            if self.show_effector_targets and self._effector_target_status:
+                ui.text_colored(ui.ImVec4(1.0, 0.6, 0.4, 1.0), self._effector_target_status)
             _, self.show_gizmos = ui.checkbox("Show Gizmos", self.show_gizmos)
             ui.same_line()
             if ui.button("Reset"):
@@ -795,6 +972,20 @@ class Viewer:
             f"Robot: {self.robot_type}   "
             f"Revolute joints: {len(self.calibration_revolute_joints)}")
 
+        ui.separator()
+        ui.text("Source Position Scale (live)")
+        ui.set_next_item_width(200)
+        sc_changed, sc_val = ui.slider_float(
+            "scale##srcscale", float(self.source_position_scale), 0.1, 5.0, "%.3f")
+        if sc_changed:
+            self._apply_source_scale(sc_val)
+        ui.same_line()
+        if ui.button("Save scale to config"):
+            self._do_write_source_scale()
+        ui.text_colored(
+            ui.ImVec4(0.7, 0.7, 0.7, 1.0),
+            "Rescales motion + zero pose together; used for bias + retarget.")
+
         if not self.calibration_mode:
             ui.text_wrapped(
                 "Turn on Calibration Mode to freeze BVH playback, "
@@ -807,6 +998,47 @@ class Viewer:
             "Show Zero Pose Overlay", self.show_zero_pose_reference)
         if ref_changed and not self.show_zero_pose_reference:
             self._clear_reference_overlay()
+
+        ui.separator()
+        # One-click "foolproof" calibration: match the robot to the zero pose
+        # (sliders below), then click. Persists the live source scale (if
+        # unsaved) and recomputes + writes joint_scales AND joint_offsets
+        # (including the offset.p residual) from one calibration snapshot.
+        if ui.button("One-Click Calibrate (scales + offsets)"):
+            self._do_calibrate_all()
+        ui.text_colored(
+            ui.ImVec4(0.7, 0.85, 0.7, 1.0),
+            "Saves the current source scale, then recomputes & writes "
+            "joint_scales AND joint_offsets (incl. offset.p).")
+
+        have_scales = bool(self._calibration_last_scales)
+        have_offsets = self._calibration_last_offsets is not None
+        if not have_scales and not have_offsets:
+            ui.begin_disabled()
+        if ui.button("Print scales##s"):
+            print(json.dumps(self._calibration_last_scales, indent=4))
+        ui.same_line()
+        if ui.button("Print offsets##o"):
+            print(json.dumps(self._calibration_last_offsets, indent=4))
+        if not have_scales and not have_offsets:
+            ui.end_disabled()
+
+        if have_scales:
+            ui.text("Computed joint_scales:")
+            if ui.begin_child("##scales_preview", ui.ImVec2(0, 120)):
+                for k, v in self._calibration_last_scales.items():
+                    ui.text(f"{k:14s}  {v:.4f}")
+            ui.end_child()
+
+        if have_offsets:
+            ui.text("Computed offset.q (xyzw) per joint:")
+            if ui.begin_child("##offset_preview", ui.ImVec2(0, 140)):
+                for soma_joint, vals in self._calibration_last_offsets.items():
+                    q = vals[1]
+                    ui.text(
+                        f"{soma_joint:14s}  "
+                        f"({q[0]:+.3f}, {q[1]:+.3f}, {q[2]:+.3f}, {q[3]:+.3f})")
+            ui.end_child()
 
         ui.separator()
         if ui.collapsing_header("Robot Joint Sliders",
@@ -851,70 +1083,6 @@ class Viewer:
                     if s_changed:
                         self.calibration_joint_q[j["q_idx"]] = new_val
             ui.end_child()
-
-        ui.separator()
-        if ui.collapsing_header("Compute joint_scales",
-                                flags=ui.TreeNodeFlags_.default_open):
-            ui.text_wrapped(
-                "Per-joint magnitude scales |robot_vec| / |soma_vec|, derived "
-                "from the matching reference poses above. Run this whenever "
-                "you change robots, the reference pose, or model_height.")
-            if ui.button("Compute Scales"):
-                self._do_compute_scales()
-            ui.same_line()
-            if not self._calibration_last_scales:
-                ui.begin_disabled()
-            if ui.button("Write scales to Config"):
-                self._do_write_scales()
-            ui.same_line()
-            if ui.button("Print scales##s"):
-                print(json.dumps(self._calibration_last_scales, indent=4))
-            if not self._calibration_last_scales:
-                ui.end_disabled()
-
-            if self._calibration_last_scales:
-                ui.spacing()
-                if ui.begin_child("##scales_preview", ui.ImVec2(0, 120)):
-                    for k, v in self._calibration_last_scales.items():
-                        ui.text(f"{k:14s}  {v:.4f}")
-                ui.end_child()
-
-        ui.separator()
-        if ui.collapsing_header("Compute joint_offsets",
-                                flags=ui.TreeNodeFlags_.default_open):
-            ui.text(f"ik_map entries: {len(self._calibration_retargeter_cfg.get('ik_map', {}))}")
-            ui.text_wrapped(
-                "offset.q always recomputes (corrects coordinate-frame "
-                "mismatch). offset.p is left at its hand-tuned value unless "
-                "you tick the box below; ticking it recomputes the residual "
-                "AFTER scaling, so make sure joint_scales is up to date.")
-            _, self._calc_position = ui.checkbox(
-                "Also overwrite offset.p (residual after scaling)",
-                getattr(self, "_calc_position", False))
-
-            if ui.button("Compute Offsets"):
-                self._do_compute_bias()
-            ui.same_line()
-            if self._calibration_last_offsets is None:
-                ui.begin_disabled()
-            if ui.button("Write offsets to Config"):
-                self._do_write_offsets()
-            ui.same_line()
-            if ui.button("Print offsets##o"):
-                print(json.dumps(self._calibration_last_offsets, indent=4))
-            if self._calibration_last_offsets is None:
-                ui.end_disabled()
-
-            if self._calibration_last_offsets is not None:
-                ui.spacing()
-                ui.text("Computed offset.q (xyzw) per SOMA joint:")
-                if ui.begin_child("##offset_preview", ui.ImVec2(0, 140)):
-                    for soma_joint, vals in self._calibration_last_offsets.items():
-                        q = vals[1]
-                        ui.text(
-                            f"{soma_joint:14s}  "
-                            f"({q[0]:+.3f}, {q[1]:+.3f}, {q[2]:+.3f}, {q[3]:+.3f})")
-                ui.end_child()
 
         if self._calibration_status:
             ui.separator()
@@ -1257,6 +1425,7 @@ class Viewer:
             offsets_cfg, self._calibration_last_offsets,
             keep_existing_position=keep_pos)
         calibration_utils.write_scaler_config(offsets_cfg, path)
+        self._invalidate_effector_scaler()
         self._calibration_status = f"Wrote offsets to {path}"
         print(f"[INFO]: {self._calibration_status}")
 
@@ -1268,7 +1437,56 @@ class Viewer:
         calibration_utils.merge_scales_into_config(
             scaler_cfg, self._calibration_last_scales)
         calibration_utils.write_scaler_config(scaler_cfg, path)
+        self._invalidate_effector_scaler()
         self._calibration_status = f"Wrote joint_scales to {path}"
+        print(f"[INFO]: {self._calibration_status}")
+
+    def _do_calibrate_all(self):
+        """One-click calibration: persist scale + compute/write scales & offsets.
+
+        Foolproof entry point that guarantees ``joint_scales`` and
+        ``joint_offsets`` (including the size-dependent ``offset.p`` residual) are
+        recomputed together from the SAME reference poses, and that the live
+        source position scale is saved to the retargeter config. This avoids the
+        classic footgun of changing the scale (or recomputing scales) while
+        leaving a stale ``offset.p`` behind.
+        """
+        steps = []
+
+        # 1. Persist the live source scale (even if the user never clicked Save).
+        if getattr(self, "_source_scale_dirty", False):
+            self._do_write_source_scale()
+            steps.append("saved scale")
+
+        # 2. joint_scales: compute + write.
+        self._do_compute_scales()
+        self._do_write_scales()
+        steps.append(f"{len(self._calibration_last_scales or {})} scales")
+
+        # 3. joint_offsets: force the offset.p residual to be recomputed so it
+        #    always matches the freshly written scales, then write.
+        prev_calc_position = getattr(self, "_calc_position", False)
+        self._calc_position = True
+        try:
+            self._do_compute_bias()
+            self._do_write_offsets()
+        finally:
+            self._calc_position = prev_calc_position
+        steps.append(f"{len(self._calibration_last_offsets or {})} offsets (+offset.p)")
+
+        # Report the largest recomputed offset.p residual. If this is big (e.g.
+        # >5 cm on an arm joint), the robot calibration pose does not match the
+        # source zero pose well there, and that residual rotates with the joint
+        # at retarget -> the arm drifts/stretches away from the calibration pose.
+        max_p, max_j = 0.0, ""
+        for j, vals in (self._calibration_last_offsets or {}).items():
+            p = vals[0]
+            m = (p[0] ** 2 + p[1] ** 2 + p[2] ** 2) ** 0.5
+            if m > max_p:
+                max_p, max_j = m, j
+        steps.append(f"max|offset.p|={max_p * 100:.1f}cm @ {max_j}")
+
+        self._calibration_status = "One-click calibrate done: " + ", ".join(steps)
         print(f"[INFO]: {self._calibration_status}")
 
     def ui_playback_controls(self, ui):
