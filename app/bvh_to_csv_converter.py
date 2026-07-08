@@ -267,6 +267,8 @@ class Viewer:
         if (persisted_scale is not None
                 and abs(float(persisted_scale) - self.source_position_scale) > 1e-9):
             self._apply_source_scale(float(persisted_scale))
+        # At startup the in-memory scale matches the config on disk (nothing to save).
+        self._source_scale_dirty = False
 
     def _apply_source_scale(self, new_scale):
         """Rescale the loaded source data (motion + zero-pose reference) in place.
@@ -301,6 +303,8 @@ class Viewer:
                     self.zero_pose_reference_local_zero)
 
         self.source_position_scale = new_scale
+        # Live scale differs from what's persisted in the config until saved.
+        self._source_scale_dirty = True
         # Size-dependent calibration results are now stale.
         self._calibration_last_scales = None
         self._calibration_last_offsets = None
@@ -320,6 +324,7 @@ class Viewer:
         with open(path, 'w') as f:
             json.dump(cfg, f, indent=4)
         self._calibration_retargeter_cfg = cfg
+        self._source_scale_dirty = False
         self._calibration_status = (
             f"Saved retarget_source_position_scale = "
             f"{self.source_position_scale:.3f} to {os.path.basename(str(path))}")
@@ -995,6 +1000,47 @@ class Viewer:
             self._clear_reference_overlay()
 
         ui.separator()
+        # One-click "foolproof" calibration: match the robot to the zero pose
+        # (sliders below), then click. Persists the live source scale (if
+        # unsaved) and recomputes + writes joint_scales AND joint_offsets
+        # (including the offset.p residual) from one calibration snapshot.
+        if ui.button("One-Click Calibrate (scales + offsets)"):
+            self._do_calibrate_all()
+        ui.text_colored(
+            ui.ImVec4(0.7, 0.85, 0.7, 1.0),
+            "Saves the current source scale, then recomputes & writes "
+            "joint_scales AND joint_offsets (incl. offset.p).")
+
+        have_scales = bool(self._calibration_last_scales)
+        have_offsets = self._calibration_last_offsets is not None
+        if not have_scales and not have_offsets:
+            ui.begin_disabled()
+        if ui.button("Print scales##s"):
+            print(json.dumps(self._calibration_last_scales, indent=4))
+        ui.same_line()
+        if ui.button("Print offsets##o"):
+            print(json.dumps(self._calibration_last_offsets, indent=4))
+        if not have_scales and not have_offsets:
+            ui.end_disabled()
+
+        if have_scales:
+            ui.text("Computed joint_scales:")
+            if ui.begin_child("##scales_preview", ui.ImVec2(0, 120)):
+                for k, v in self._calibration_last_scales.items():
+                    ui.text(f"{k:14s}  {v:.4f}")
+            ui.end_child()
+
+        if have_offsets:
+            ui.text("Computed offset.q (xyzw) per joint:")
+            if ui.begin_child("##offset_preview", ui.ImVec2(0, 140)):
+                for soma_joint, vals in self._calibration_last_offsets.items():
+                    q = vals[1]
+                    ui.text(
+                        f"{soma_joint:14s}  "
+                        f"({q[0]:+.3f}, {q[1]:+.3f}, {q[2]:+.3f}, {q[3]:+.3f})")
+            ui.end_child()
+
+        ui.separator()
         if ui.collapsing_header("Robot Joint Sliders",
                                 flags=ui.TreeNodeFlags_.default_open):
             ui.text("Adjust joint angles (rad) to match the zero pose.")
@@ -1037,70 +1083,6 @@ class Viewer:
                     if s_changed:
                         self.calibration_joint_q[j["q_idx"]] = new_val
             ui.end_child()
-
-        ui.separator()
-        if ui.collapsing_header("Compute joint_scales",
-                                flags=ui.TreeNodeFlags_.default_open):
-            ui.text_wrapped(
-                "Per-joint magnitude scales |robot_vec| / |soma_vec|, derived "
-                "from the matching reference poses above. Run this whenever "
-                "you change robots, the reference pose, or model_height.")
-            if ui.button("Compute Scales"):
-                self._do_compute_scales()
-            ui.same_line()
-            if not self._calibration_last_scales:
-                ui.begin_disabled()
-            if ui.button("Write scales to Config"):
-                self._do_write_scales()
-            ui.same_line()
-            if ui.button("Print scales##s"):
-                print(json.dumps(self._calibration_last_scales, indent=4))
-            if not self._calibration_last_scales:
-                ui.end_disabled()
-
-            if self._calibration_last_scales:
-                ui.spacing()
-                if ui.begin_child("##scales_preview", ui.ImVec2(0, 120)):
-                    for k, v in self._calibration_last_scales.items():
-                        ui.text(f"{k:14s}  {v:.4f}")
-                ui.end_child()
-
-        ui.separator()
-        if ui.collapsing_header("Compute joint_offsets",
-                                flags=ui.TreeNodeFlags_.default_open):
-            ui.text(f"ik_map entries: {len(self._calibration_retargeter_cfg.get('ik_map', {}))}")
-            ui.text_wrapped(
-                "offset.q always recomputes (corrects coordinate-frame "
-                "mismatch). offset.p is left at its hand-tuned value unless "
-                "you tick the box below; ticking it recomputes the residual "
-                "AFTER scaling, so make sure joint_scales is up to date.")
-            _, self._calc_position = ui.checkbox(
-                "Also overwrite offset.p (residual after scaling)",
-                getattr(self, "_calc_position", False))
-
-            if ui.button("Compute Offsets"):
-                self._do_compute_bias()
-            ui.same_line()
-            if self._calibration_last_offsets is None:
-                ui.begin_disabled()
-            if ui.button("Write offsets to Config"):
-                self._do_write_offsets()
-            ui.same_line()
-            if ui.button("Print offsets##o"):
-                print(json.dumps(self._calibration_last_offsets, indent=4))
-            if self._calibration_last_offsets is None:
-                ui.end_disabled()
-
-            if self._calibration_last_offsets is not None:
-                ui.spacing()
-                ui.text("Computed offset.q (xyzw) per SOMA joint:")
-                if ui.begin_child("##offset_preview", ui.ImVec2(0, 140)):
-                    for soma_joint, vals in self._calibration_last_offsets.items():
-                        q = vals[1]
-                        ui.text(
-                            f"{soma_joint:14s}  "
-                            f"({q[0]:+.3f}, {q[1]:+.3f}, {q[2]:+.3f}, {q[3]:+.3f})")
-                ui.end_child()
 
         if self._calibration_status:
             ui.separator()
@@ -1457,6 +1439,54 @@ class Viewer:
         calibration_utils.write_scaler_config(scaler_cfg, path)
         self._invalidate_effector_scaler()
         self._calibration_status = f"Wrote joint_scales to {path}"
+        print(f"[INFO]: {self._calibration_status}")
+
+    def _do_calibrate_all(self):
+        """One-click calibration: persist scale + compute/write scales & offsets.
+
+        Foolproof entry point that guarantees ``joint_scales`` and
+        ``joint_offsets`` (including the size-dependent ``offset.p`` residual) are
+        recomputed together from the SAME reference poses, and that the live
+        source position scale is saved to the retargeter config. This avoids the
+        classic footgun of changing the scale (or recomputing scales) while
+        leaving a stale ``offset.p`` behind.
+        """
+        steps = []
+
+        # 1. Persist the live source scale (even if the user never clicked Save).
+        if getattr(self, "_source_scale_dirty", False):
+            self._do_write_source_scale()
+            steps.append("saved scale")
+
+        # 2. joint_scales: compute + write.
+        self._do_compute_scales()
+        self._do_write_scales()
+        steps.append(f"{len(self._calibration_last_scales or {})} scales")
+
+        # 3. joint_offsets: force the offset.p residual to be recomputed so it
+        #    always matches the freshly written scales, then write.
+        prev_calc_position = getattr(self, "_calc_position", False)
+        self._calc_position = True
+        try:
+            self._do_compute_bias()
+            self._do_write_offsets()
+        finally:
+            self._calc_position = prev_calc_position
+        steps.append(f"{len(self._calibration_last_offsets or {})} offsets (+offset.p)")
+
+        # Report the largest recomputed offset.p residual. If this is big (e.g.
+        # >5 cm on an arm joint), the robot calibration pose does not match the
+        # source zero pose well there, and that residual rotates with the joint
+        # at retarget -> the arm drifts/stretches away from the calibration pose.
+        max_p, max_j = 0.0, ""
+        for j, vals in (self._calibration_last_offsets or {}).items():
+            p = vals[0]
+            m = (p[0] ** 2 + p[1] ** 2 + p[2] ** 2) ** 0.5
+            if m > max_p:
+                max_p, max_j = m, j
+        steps.append(f"max|offset.p|={max_p * 100:.1f}cm @ {max_j}")
+
+        self._calibration_status = "One-click calibrate done: " + ", ".join(steps)
         print(f"[INFO]: {self._calibration_status}")
 
     def ui_playback_controls(self, ui):
