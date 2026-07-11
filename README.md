@@ -16,6 +16,7 @@ The pipeline applies human-to-robot scaling, multi-objective IK with joint limit
 | `unitree_g1` | `assets/default_bvh_to_csv_converter_config.json` | Unitree G1 (29 DOF) |
 | `engineai_pm01` | `assets/pm01_bvh_to_csv_converter_config.json` | EngineAI PM01 (24 DOF) |
 | `hightorque_pi_plus` | `assets/pi_plus_bvh_to_csv_converter_config.json` | Hightorque Pi Plus (20 DOF) |
+| `hightorque_pi_plus_s` | `assets/pi_plus_s_bvh_to_csv_converter_config.json` | Hightorque Pi Plus S (23 DOF; same model as Pi Plus, independent robot) |
 | `pndbotics_adam_lite` | `assets/adam_lite_bvh_to_csv_converter_config.json` | PND Adam Lite (25 DOF) |
 | `pndbotics_adam_sp` | `assets/adam_sp_bvh_to_csv_converter_config.json` | PND Adam SP (29 DOF; 3-DOF waist, 7-DOF arms) |
 
@@ -97,6 +98,7 @@ Other robots — same command, different config:
 ```bash
 python app/bvh_to_csv_converter.py --config assets/pm01_bvh_to_csv_converter_config.json --viewer gl
 python app/bvh_to_csv_converter.py --config assets/pi_plus_bvh_to_csv_converter_config.json --viewer gl
+python app/bvh_to_csv_converter.py --config assets/pi_plus_s_bvh_to_csv_converter_config.json --viewer gl
 python app/bvh_to_csv_converter.py --config assets/adam_lite_bvh_to_csv_converter_config.json --viewer gl
 python app/bvh_to_csv_converter.py --config assets/adam_sp_bvh_to_csv_converter_config.json --viewer gl
 ```
@@ -199,6 +201,12 @@ python app/bvh_to_csv_converter.py \
   --config assets/adam_sp_bvh_to_csv_converter_config.json \
   --viewer gl \
   --data mydata
+
+# LAFAN1 dataset (dataset/lafan1/) -> Hightorque Pi Plus S
+python app/bvh_to_csv_converter.py \
+  --config assets/pi_plus_s_bvh_to_csv_converter_config.json \
+  --viewer gl \
+  --data lafan1
 ```
 
 `--data <source>` switches the pipeline to a registered non-SOMA source. The source's
@@ -214,8 +222,9 @@ source is mostly a matter of filling in tables + JSON configs.
 > their `joint_scales` / `joint_offsets` are still neutral placeholders — run the in-app
 > **Calibration** panel once per robot to fill in real values (Adam Lite is already
 > calibrated; Adam SP's `mydata` configs are copied from Adam Lite and still need a
-> calibration pass). To add another robot or a brand-new source, see
-> [Adding a new source/robot pair](#custom-non-soma-data) below.
+> calibration pass). `lafan1` is currently only wired up for `hightorque_pi_plus_s` and
+> is likewise an uncalibrated starter config. To add another robot or a brand-new
+> source, see [Adding a new source/robot pair](#custom-non-soma-data) below.
 
 **Config split per source.** Configs live under `configs/<robot>/<source>/` (e.g.
 `configs/engineai_pm01/mydata/`), with the robot-level `<robot>_feet_stabilizer_config.json`

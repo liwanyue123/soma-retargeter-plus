@@ -1,0 +1,38 @@
+{
+    "_comment": "STARTER scaler config for the native skeleton (mydata -> hightorque_pi_plus_s): tracking/scaling params only (joint_scales + joint_parents). Calibration offsets live separately in mydata_to_pi_plus_s_offsets_config.json. joint_scales start at 1.0; populate via the in-app Calibration panel (Compute joint_scales -> Write).",
+    "robot_type": "hightorque_pi_plus_s",
+    "human_root_name": "Hips",
+    "human_height_assumption": 1.8,
+    "joint_scales": {
+        "Hips": 1.0,
+        "Spine3": 1.0,
+        "LeftUpLeg": 1.0,
+        "RightUpLeg": 1.0,
+        "LeftLeg": 1.0,
+        "RightLeg": 1.0,
+        "LeftFoot": 1.0,
+        "RightFoot": 1.0,
+        "LeftArm": 1.0,
+        "RightArm": 1.0,
+        "LeftForeArm": 1.0,
+        "RightForeArm": 1.0,
+        "LeftHand": 1.0,
+        "RightHand": 1.0
+    },
+    "joint_parents": {
+        "Hips": "",
+        "Spine3": "Hips",
+        "LeftUpLeg": "Hips",
+        "RightUpLeg": "Hips",
+        "LeftLeg": "LeftUpLeg",
+        "RightLeg": "RightUpLeg",
+        "LeftFoot": "LeftLeg",
+        "RightFoot": "RightLeg",
+        "LeftArm": "Spine3",
+        "RightArm": "Spine3",
+        "LeftForeArm": "LeftArm",
+        "RightForeArm": "RightArm",
+        "LeftHand": "LeftForeArm",
+        "RightHand": "RightForeArm"
+    }
+}

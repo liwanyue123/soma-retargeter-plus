@@ -41,6 +41,28 @@ class Viewer:
             get_facing_direction_type_from_str(self.config['retarget_source_facing_direction']),
             yaw_offset_deg=float(self.config.get('retarget_source_yaw_offset_deg', 0.0)))
 
+        # Source skeleton type (selectable via the `--data` flag, which overrides
+        # 'retarget_source' in the config). Defaults to SOMA for back-compat.
+        # Computed here (before the headless early-return below) since
+        # batched_retargeting() also relies on these.
+        self.source_str = self.config.get('retarget_source', 'soma')
+        self.source_type = pipeline_utils.get_source_type_from_str(self.source_str)
+        self.source_position_scale = float(self.config.get(
+            'retarget_source_position_scale',
+            pipeline_utils.get_source_position_scale(self.source_type)))
+        self.source_recenter_xy = bool(self.config.get(
+            'retarget_source_recenter_xy',
+            pipeline_utils.get_source_recenter_xy(self.source_type)))
+
+        # Per-axis motion-amplitude scales (x, y, z), applied together:
+        #   full_amplitude_scale: scales every effector (hands/feet too; may
+        #     slip/drift) relative to its own standing reference.
+        #   root_amplitude_scale: scales only the root trajectory relative to
+        #     its standing reference, leaving body pose/proportions untouched.
+        # (1, 1, 1) == identity for both.
+        self.full_amplitude_scale = [1.0, 1.0, 1.0]
+        self.root_amplitude_scale = [1.0, 1.0, 1.0]
+
         if isinstance(self.viewer, newton.viewer.ViewerNull):
             # Headless mode for batch processing
             return
@@ -55,37 +77,20 @@ class Viewer:
         self.playback_loop       = True
         self.playback_total_time = 0.0
 
-        # Source skeleton type (selectable via the `--data` flag, which overrides
-        # 'retarget_source' in the config). Defaults to SOMA for back-compat.
-        self.source_str = self.config.get('retarget_source', 'soma')
-        self.source_type = pipeline_utils.get_source_type_from_str(self.source_str)
-        self.source_position_scale = float(self.config.get(
-            'retarget_source_position_scale',
-            pipeline_utils.get_source_position_scale(self.source_type)))
-        self.source_recenter_xy = bool(self.config.get(
-            'retarget_source_recenter_xy',
-            pipeline_utils.get_source_recenter_xy(self.source_type)))
-
-        self.retarget_source_options = ['soma', 'mydata', 'mydata2']
+        self.retarget_source_options = ['soma', 'mydata', 'mydata2', 'lafan1']
         if self.source_str not in self.retarget_source_options:
             self.retarget_source_options.append(self.source_str)
         self.retarget_target_options = [
             'unitree_g1',
             'engineai_pm01',
             'hightorque_pi_plus',
+            'hightorque_pi_plus_s',
             'pndbotics_adam_lite',
             'pndbotics_adam_sp',
         ]
         self.retarget_solver_options = ['Newton']
         self.retarget_solver_idx     = 0
         self.retarget_source_idx     = self.retarget_source_options.index(self.source_str)
-
-        # Per-axis motion-amplitude scale (x, y, z) for the root trajectory.
-        # (1, 1, 1) == default equal scaling; tweak e.g. z to fit a 1.5 m climb
-        # onto a 1 m box without changing body pose/proportions.
-        # amplitude_full_body: scale hands/feet too (may slip/drift) vs root-only.
-        self.amplitude_scale = [1.0, 1.0, 1.0]
-        self.amplitude_full_body = False
 
         # Resolve currently selected robot from config (falls back to G1).
         self.robot_type = self.config.get('retarget_target', 'unitree_g1')
@@ -694,13 +699,15 @@ class Viewer:
 
         def clamp_gizmo_transform(tx: wp.transform):
             return wp.transform(
-                wp.vec3(tx.p[0], tx.p[1], 0.0),
+                wp.vec3(tx.p[0], tx.p[1], tx.p[2]),
                 math_utils.quat_twist(wp.vec3(0.0, 0.0, 1.0), tx.q))
 
         for i in range(len(self.robot_offsets)):
             self.robot_offsets[i] = clamp_gizmo_transform(self.robot_offsets[i])
         for i in range(len(self.animation_offsets)):
             self.animation_offsets[i] = clamp_gizmo_transform(self.animation_offsets[i])
+        for obj in self.scene_objects:
+            self._ground_scene_box(obj)
 
         self.update_robot_states()
 
@@ -770,8 +777,8 @@ class Viewer:
         else:
             raise(ValueError(f"[ERROR]: Unknown retargeter solver [{retarget_solver}"))
         
-        pipeline.set_amplitude_scale(*self.amplitude_scale)
-        pipeline.set_amplitude_full(self.amplitude_full_body)
+        pipeline.set_root_amplitude_scale(*self.root_amplitude_scale)
+        pipeline.set_full_amplitude_scale(*self.full_amplitude_scale)
         r_offsets = [wp.transform(wp.vec3(0,0,0), wp.quat(*s.xform[3:7])) for s in self.skeleton_instances]
         pipeline.add_input_motions(self.animation_buffers, r_offsets, True)
         buffers = pipeline.execute()
@@ -830,22 +837,31 @@ class Viewer:
 
             ui.spacing()
             ui.align_text_to_frame_padding()
-            ui.text("Motion Amplitude (root trajectory):")
+            ui.text("Motion Amplitude:")
             ui.text_disabled("Adjust, then press Retarget to apply.")
-            amp_labels = ("X##ampx", "Y##ampy", "Z##ampz")
-            for axis, label in enumerate(amp_labels):
-                ui.set_next_item_width(220)
-                a_changed, a_val = ui.slider_float(
-                    label, float(self.amplitude_scale[axis]), 0.1, 2.0, "%.2f")
-                if a_changed:
-                    self.amplitude_scale[axis] = a_val
+            ui.text_disabled("Left: Full Body (may slip/drift)  Right: Root only")
+
+            _AMP_SLIDER_WIDTH = 80
+            amp_axis_labels = ("X", "Y", "Z")
+            for axis, axis_label in enumerate(amp_axis_labels):
+                ui.set_next_item_width(_AMP_SLIDER_WIDTH)
+                fb_changed, fb_val = ui.slider_float(
+                    f"FB {axis_label}##fbamp{axis}", float(self.full_amplitude_scale[axis]), 0.1, 2.0, "%.2f")
+                if fb_changed:
+                    self.full_amplitude_scale[axis] = fb_val
+
+                ui.same_line()
+                ui.set_next_item_width(_AMP_SLIDER_WIDTH)
+                r_changed, r_val = ui.slider_float(
+                    f"Root {axis_label}##rootamp{axis}", float(self.root_amplitude_scale[axis]), 0.1, 2.0, "%.2f")
+                if r_changed:
+                    self.root_amplitude_scale[axis] = r_val
+
+            if ui.small_button("Reset Full Body##fbamp"):
+                self.full_amplitude_scale = [1.0, 1.0, 1.0]
             ui.same_line()
-            if ui.small_button("Reset##amp"):
-                self.amplitude_scale = [1.0, 1.0, 1.0]
-            f_changed, f_val = ui.checkbox(
-                "Scale full body (hands/feet, may slip/drift)", self.amplitude_full_body)
-            if f_changed:
-                self.amplitude_full_body = f_val
+            if ui.small_button("Reset Root##rootamp"):
+                self.root_amplitude_scale = [1.0, 1.0, 1.0]
 
             if (len(self.animation_buffers) == 0):
                 ui.end_disabled()
@@ -880,7 +896,16 @@ class Viewer:
                     defaultextension=".csv",
                     filetypes=[("CSV files", "*.csv")])
                 if save_path:
-                    csv_utils.save_csv(save_path, self.robot_csv_animation_buffers[0], csv_config=self.csv_config)
+                    # Bake in the live viewport gizmo offset (e.g. dragging the
+                    # robot up/down) so the saved CSV matches what is shown on
+                    # screen -- mirrors the override done in update_robot_states().
+                    save_buffer = self.robot_csv_animation_buffers[0]
+                    prev_xform = wp.transform(save_buffer.xform)
+                    save_buffer.xform = self.robot_offsets[0]
+                    try:
+                        csv_utils.save_csv(save_path, save_buffer, csv_config=self.csv_config)
+                    finally:
+                        save_buffer.xform = prev_xform
 
             if self.robot_csv_animation_buffers[0] is None:
                 ui.end_disabled()
@@ -1088,20 +1113,36 @@ class Viewer:
             ui.separator()
             ui.text_wrapped(self._calibration_status)
 
+    def _ground_scene_box(self, obj):
+        """Keep box bottom on z=0; center z is always half the box height."""
+        if obj.get("type") != "box":
+            return
+        sz = obj["size"]
+        tx = obj["transform"]
+        z = max(0.001, float(sz[2])) * 0.5
+        p = tx.p
+        if abs(float(p[2]) - z) < 1e-8:
+            return
+        obj["transform"] = wp.transform(
+            wp.vec3(float(p[0]), float(p[1]), z),
+            tx.q)
+
     def _add_scene_box(self):
         obj_id = self._scene_object_next_id
         self._scene_object_next_id += 1
         n = len(self.scene_objects)
-        self.scene_objects.append({
+        size = wp.vec3(0.5, 0.5, 0.5)
+        obj = {
             "id": obj_id,
             "name": f"Cube {obj_id}",
             "type": "box",
-            "size": wp.vec3(0.5, 0.5, 0.5),
+            "size": size,
             "transform": wp.transform(
-                wp.vec3(1.0, float(n) * 0.5, 0.25),
+                wp.vec3(1.0, float(n) * 0.5, float(size[2]) * 0.5),
                 wp.quat_identity()),
             "color": wp.vec3(0.9, 0.45, 0.15),
-        })
+        }
+        self.scene_objects.append(obj)
         self._selected_scene_object_idx = len(self.scene_objects) - 1
 
     def _ensure_scene_unit_box_mesh(self):
@@ -1187,7 +1228,7 @@ class Viewer:
             pos = entry.get("position", [0.0, 0.0, 0.0])
             quat = entry.get("quat_xyzw", [0.0, 0.0, 0.0, 1.0])
             col = entry.get("color", [0.9, 0.45, 0.15])
-            loaded.append({
+            obj = {
                 "id": int(entry.get("id", self._scene_object_next_id)),
                 "name": entry.get("name", f"Cube {entry.get('id', 0)}"),
                 "type": entry.get("type", "box"),
@@ -1196,7 +1237,9 @@ class Viewer:
                     wp.vec3(float(pos[0]), float(pos[1]), float(pos[2])),
                     wp.quat(float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3]))),
                 "color": wp.vec3(float(col[0]), float(col[1]), float(col[2])),
-            })
+            }
+            self._ground_scene_box(obj)
+            loaded.append(obj)
         for old_id in list(self._scene_object_logged_ids):
             self._hide_scene_object(old_id)
         self.scene_objects = loaded
@@ -1246,11 +1289,16 @@ class Viewer:
             "Show Transform Gizmo (drag in viewport)", self.show_scene_object_gizmos)
 
         ui.separator()
-        ui.text("Select a cube, edit values below, or drag the gizmo in 3D.")
-        if ui.begin_child("##scene_object_list", ui.ImVec2(0, 100)):
+        ui.text("Select a cube, edit XY / size, or drag the gizmo (Z locked to ground).")
+        list_h = max(100.0, min(220.0, 24.0 * max(1, len(self.scene_objects)) + 8.0))
+        if ui.begin_child("##scene_object_list", ui.ImVec2(0, list_h)):
             for i, obj in enumerate(self.scene_objects):
                 selected = i == self._selected_scene_object_idx
-                if ui.selectable(f"{obj['name']}##scene_obj_{obj['id']}", selected):
+                # imgui.selectable returns (clicked, selected); a non-empty tuple is
+                # always truthy, so we must unpack clicked explicitly.
+                clicked, _ = ui.selectable(
+                    f"{obj['name']}##scene_obj_{obj['id']}", selected)
+                if clicked:
                     self._selected_scene_object_idx = i
         ui.end_child()
 
@@ -1270,17 +1318,21 @@ class Viewer:
                     max(0.001, float(new_sz[0])),
                     max(0.001, float(new_sz[1])),
                     max(0.001, float(new_sz[2])))
+                self._ground_scene_box(obj)
 
             tx = obj["transform"]
             p = tx.p
-            pos_vals = [float(p[0]), float(p[1]), float(p[2])]
+            # Z is derived from height so the box bottom stays on the ground.
+            pos_xy = [float(p[0]), float(p[1])]
             ui.set_next_item_width(-1)
-            pos_changed, new_pos = ui.input_float3(
-                "Position (m)", pos_vals, "%.4f")
+            pos_changed, new_xy = ui.input_float2(
+                "Position XY (m)", pos_xy, "%.4f")
             if pos_changed:
                 obj["transform"] = wp.transform(
-                    wp.vec3(float(new_pos[0]), float(new_pos[1]), float(new_pos[2])),
+                    wp.vec3(float(new_xy[0]), float(new_xy[1]), float(p[2])),
                     tx.q)
+                self._ground_scene_box(obj)
+            ui.text(f"Position Z (locked, bottom on ground): {float(obj['transform'].p[2]):.4f} m")
             ui.pop_id()
 
         status = getattr(self, "_scene_objects_status", None)
@@ -1579,8 +1631,8 @@ class Viewer:
         if retarget_pipeline is None:
             print(f"[ERROR]: Invalid retarget solver selected [{retarget_solver}]. Use 'Newton'.")
             exit(-1)
-        retarget_pipeline.set_amplitude_scale(*self.amplitude_scale)
-        retarget_pipeline.set_amplitude_full(self.amplitude_full_body)
+        retarget_pipeline.set_root_amplitude_scale(*self.root_amplitude_scale)
+        retarget_pipeline.set_full_amplitude_scale(*self.full_amplitude_scale)
 
         nb_retargeted_motions = 0
         start_time = time.time()

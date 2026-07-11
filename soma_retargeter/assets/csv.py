@@ -34,9 +34,18 @@ class _StandardCSVConfig:
                joint_0_deg, joint_1_deg, ... joint_n_deg
 
     Sub-classes only need to set ``name`` and ``csv_header``.
+
+    ``dof_permutation`` is only needed when the CSV column order differs from
+    the robot's physical/model joint order (e.g. the anim buffer produced by
+    the retargeting pipeline, which follows MJCF declaration order). Leave it
+    ``None`` (the default) when ``csv_header`` already matches that physical
+    order -- this is the case for every robot except when explicitly noted.
+    ``dof_permutation[i]`` is the physical-model DOF index that should be
+    written to CSV column ``i`` (and read back from it).
     """
     name: str = "_unnamed"
     csv_header: ClassVar[List[str]] = []
+    dof_permutation: ClassVar[List[int]] = None
 
     def to_anim_frame(self, csv_row: np.ndarray) -> np.ndarray:
         """Convert one CSV row (including frame index) into one anim frame."""
@@ -46,7 +55,13 @@ class _StandardCSVConfig:
         anim_row[0:3] = csv_row[1:4] * 0.01  # cm -> m
         euler = np.deg2rad(csv_row[4:7])
         anim_row[3:7] = wp.quat_rpy(euler[0], euler[1], euler[2])
-        anim_row[7:] = np.deg2rad(csv_row[7:])
+
+        joint_dofs_rad = np.deg2rad(csv_row[7:])
+        if self.dof_permutation is not None:
+            # csv column i -> physical dof_permutation[i]; scatter into place.
+            anim_row[7:][np.array(self.dof_permutation)] = joint_dofs_rad
+        else:
+            anim_row[7:] = joint_dofs_rad
         return anim_row
 
     def to_csv_row(self, frame_idx: int, anim_row: np.ndarray) -> List[float]:
@@ -55,7 +70,12 @@ class _StandardCSVConfig:
         q = wp.quat(*anim_row[3:7])
         euler = R.from_quat([q[0], q[1], q[2], q[3]]).as_euler("xyz", degrees=True)
         row = [frame_idx, t[0], t[1], t[2], euler[0], euler[1], euler[2]]
-        row.extend(np.rad2deg(anim_row[7:]))
+
+        joint_dofs_rad = anim_row[7:]
+        if self.dof_permutation is not None:
+            # csv column i <- physical dof_permutation[i]; gather into order.
+            joint_dofs_rad = joint_dofs_rad[np.array(self.dof_permutation)]
+        row.extend(np.rad2deg(joint_dofs_rad))
         return row
 
 
@@ -118,6 +138,36 @@ class HighTorquePiPlus_CSVConfig(_StandardCSVConfig):
 
 
 @dataclass
+class HighTorquePiPlusS_CSVConfig(_StandardCSVConfig):
+    """23-DOF humanoid by HighTorque (1-DOF waist, no wrist, 2-DOF head).
+
+    Independent robot from ``hightorque_pi_plus``. ``csv_header`` matches the
+    physical/kinematic joint order (legs, then waist, then head, then arms) --
+    no ``dof_permutation`` needed. This is intentional, not just a style
+    choice: in any kinematic-tree-based solver (e.g. Pinocchio's RNEA/CRBA),
+    joint indices are assigned by parent/child topology, not by file
+    declaration order, and a parent joint's index is always lower than its
+    children's. Since the waist is the kinematic parent of the head/arms, it
+    can never be placed after them by such a solver regardless of how the
+    URDF/MJCF declares its bodies -- so the CSV column order should just
+    match that physical order directly instead of maintaining a separate
+    permutation that every downstream consumer would have to undo.
+    """
+    name: str = "hightorque_pi_plus_s_23dof"
+    csv_header: ClassVar[List[str]] = _ROOT_HEADER + [
+        "l_hip_pitch_joint", "l_hip_roll_joint", "l_thigh_joint",
+        "l_calf_joint", "l_ankle_pitch_joint", "l_ankle_roll_joint",
+        "r_hip_pitch_joint", "r_hip_roll_joint", "r_thigh_joint",
+        "r_calf_joint", "r_ankle_pitch_joint", "r_ankle_roll_joint",
+        "waist_yaw_joint",
+        "head_yaw_joint", "head_pitch_joint",
+        "l_shoulder_pitch_joint", "l_shoulder_roll_joint",
+        "l_upper_arm_joint", "l_elbow_joint",
+        "r_shoulder_pitch_joint", "r_shoulder_roll_joint",
+        "r_upper_arm_joint", "r_elbow_joint"]
+
+
+@dataclass
 class PNDboticsAdamLite_CSVConfig(_StandardCSVConfig):
     """25-DOF full humanoid by PNDbotics (3-DOF waist, 5-DOF arms, no head)."""
     name: str = "pndbotics_adam_lite_25dof"
@@ -150,11 +200,12 @@ class PNDboticsAdamSp_CSVConfig(_StandardCSVConfig):
 
 
 _ROBOT_CSV_CONFIGS = {
-    "unitree_g1":          UnitreeG129DOF_CSVConfig,
-    "engineai_pm01":       EngineAIPM01_CSVConfig,
-    "hightorque_pi_plus":  HighTorquePiPlus_CSVConfig,
-    "pndbotics_adam_lite": PNDboticsAdamLite_CSVConfig,
-    "pndbotics_adam_sp":   PNDboticsAdamSp_CSVConfig,
+    "unitree_g1":           UnitreeG129DOF_CSVConfig,
+    "engineai_pm01":        EngineAIPM01_CSVConfig,
+    "hightorque_pi_plus":   HighTorquePiPlus_CSVConfig,
+    "hightorque_pi_plus_s": HighTorquePiPlusS_CSVConfig,
+    "pndbotics_adam_lite":  PNDboticsAdamLite_CSVConfig,
+    "pndbotics_adam_sp":    PNDboticsAdamSp_CSVConfig,
 }
 
 
@@ -227,11 +278,23 @@ def save_csv(file_path: str, buffer: CSVAnimationBuffer, csv_config: RobotCSVCon
     if buffer is None or buffer.num_frames == 0:
         raise RuntimeError("[ERROR]: Empty or invalid buffer.")
 
+    # ``buffer.xform`` is a root offset (e.g. a viewport gizmo drag) that is
+    # normally only applied at render time via ``buffer.sample()``. Bake it
+    # into the root transform here too, so the saved CSV matches what is
+    # visually shown in the viewer instead of silently dropping it.
+    identity_xform = wp.transform_identity()
+    apply_xform = (
+        np.any(np.asarray(buffer.xform[0:3]) != np.asarray(identity_xform[0:3]))
+        or np.any(np.asarray(buffer.xform[3:7]) != np.asarray(identity_xform[3:7])))
+
     with open(file_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(csv_config.csv_header)
 
         for i in range(buffer.num_frames):
             data = buffer.get_data(i)
+            if apply_xform:
+                root_tx = wp.mul(buffer.xform, wp.transform(*(data[:7])))
+                data = np.concatenate((np.asarray(root_tx, dtype=np.float32), data[7:]))
             row = csv_config.to_csv_row(i, data)
             writer.writerow(row)

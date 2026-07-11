@@ -81,13 +81,17 @@ class NewtonPipeline:
             io_utils.get_config_file(retargeter_config['human_robot_scaler_config']),
             offsets_file=offsets_file)
 
-        # Per-axis motion-amplitude scale of the root trajectory (x, y, z).
-        # (1, 1, 1) reproduces the default equal/identity behaviour; set via
-        # set_amplitude_scale to e.g. shrink a 1.5 m climb onto a 1 m box.
-        # amplitude_full toggles full-body scaling (scales hands/feet too, may
-        # cause foot slip/drift) vs the default root-only (no slip/no distortion).
-        self.amplitude_scale = wp.vec3(1.0, 1.0, 1.0)
-        self.amplitude_full = False
+        # Per-axis motion-amplitude scales (x, y, z), applied together:
+        #   root_amplitude_scale: scales the root trajectory's displacement from
+        #     its standing reference; body pose/proportions stay intact (no slip).
+        #   full_amplitude_scale: scales every effector's displacement from its
+        #     own standing reference (scales hands/feet too, may cause foot
+        #     slip/drift).
+        # (1, 1, 1) for both reproduces the default identity behaviour. Set via
+        # set_root_amplitude_scale / set_full_amplitude_scale, e.g. to shrink a
+        # 1.5 m climb onto a 1 m box.
+        self.root_amplitude_scale = wp.vec3(1.0, 1.0, 1.0)
+        self.full_amplitude_scale = wp.vec3(1.0, 1.0, 1.0)
 
         self.num_body_count = self.robot_builder.body_count
         self.num_dofs = self.robot_builder.joint_dof_count
@@ -162,30 +166,35 @@ class NewtonPipeline:
         self.input_sample_rates = []
         self.max_frames = -1
 
-    def set_amplitude_scale(self, x: float, y: float, z: float):
+    def set_root_amplitude_scale(self, x: float, y: float, z: float):
         """Set the per-axis motion-amplitude scale of the root trajectory.
 
         Only the root's displacement from its standing reference (initialization
         pose) is scaled; body pose and proportions are untouched. ``(1, 1, 1)``
-        is the identity. Re-add input motions for the change to take effect.
+        is the identity. Composes with ``full_amplitude_scale``. Re-add input
+        motions for the change to take effect.
 
         Args:
             x: Scale along world X (lateral motion amplitude).
             y: Scale along world Y (forward/back motion amplitude).
             z: Scale along world Z (vertical motion amplitude, e.g. climb height).
         """
-        self.amplitude_scale = wp.vec3(float(x), float(y), float(z))
+        self.root_amplitude_scale = wp.vec3(float(x), float(y), float(z))
 
-    def set_amplitude_full(self, full: bool):
-        """Toggle full-body vs root-only motion-amplitude scaling.
+    def set_full_amplitude_scale(self, x: float, y: float, z: float):
+        """Set the per-axis motion-amplitude scale applied to every effector.
+
+        Scales every effector's (hands/feet included) displacement from its own
+        standing reference; may cause foot slip/drift. ``(1, 1, 1)`` is the
+        identity. Composes with ``root_amplitude_scale``. Re-add input motions
+        for the change to take effect.
 
         Args:
-            full: If True, scale every effector's displacement from its standing
-                reference (scales hands/feet too; may cause foot slip/drift). If
-                False (default), scale only the root trajectory, leaving body
-                pose/proportions untouched. Re-add input motions to take effect.
+            x: Scale along world X (lateral motion amplitude).
+            y: Scale along world Y (forward/back motion amplitude).
+            z: Scale along world Z (vertical motion amplitude, e.g. climb height).
         """
-        self.amplitude_full = bool(full)
+        self.full_amplitude_scale = wp.vec3(float(x), float(y), float(z))
 
     def add_input_motions(self, buffers: list[AnimationBuffer], offsets: list[wp.transform], scale_animation: bool):
         """
@@ -210,7 +219,7 @@ class NewtonPipeline:
             self.max_frames = max(self.max_frames, buffer.num_frames)
             buffer_effectors = self.human_robot_scaler.compute_effectors_from_buffer(
                 buffer, scale_animation, offsets[i],
-                amplitude_scale=self.amplitude_scale, full_body=self.amplitude_full)
+                root_amplitude_scale=self.root_amplitude_scale, full_amplitude_scale=self.full_amplitude_scale)
 
             self.input_targets.append(buffer_effectors[:, self.target_effector_indices, :])
             self.input_sample_rates.append(buffers[i].sample_rate)

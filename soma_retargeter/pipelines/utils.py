@@ -20,6 +20,9 @@ class SourceType(IntEnum):
     # with its own calibration configs (scaler / offsets) so the two datasets
     # can be retargeted independently. Selected via `--data mydata2`.
     MYDATA2 = auto()
+    # LAFAN1 dataset skeleton (Y-up, standard-centimetre BVH, Mixamo/LAFAN1
+    # joint names, no fingers). Selected via `--data lafan1`.
+    LAFAN1 = auto()
 
 
 class TargetType(IntEnum):
@@ -27,6 +30,7 @@ class TargetType(IntEnum):
     UNITREE_G1 = auto()
     ENGINEAI_PM01 = auto()
     HIGHTORQUE_PI_PLUS = auto()
+    HIGHTORQUE_PI_PLUS_S = auto()
     PNDBOTICS_ADAM_LITE = auto()
     PNDBOTICS_ADAM_SP = auto()
 
@@ -34,26 +38,29 @@ _SOURCE_TYPE_TO_STR = {
     SourceType.SOMA    : "soma",
     SourceType.MYDATA  : "mydata",
     SourceType.MYDATA2 : "mydata2",
+    SourceType.LAFAN1  : "lafan1",
 }
 _STR_TO_SOURCE_TYPE = {s : t for t, s in _SOURCE_TYPE_TO_STR.items()}
 
 _TARGET_TYPE_TO_STR = {
-    TargetType.UNITREE_G1          : "unitree_g1",
-    TargetType.ENGINEAI_PM01       : "engineai_pm01",
-    TargetType.HIGHTORQUE_PI_PLUS  : "hightorque_pi_plus",
-    TargetType.PNDBOTICS_ADAM_LITE : "pndbotics_adam_lite",
-    TargetType.PNDBOTICS_ADAM_SP   : "pndbotics_adam_sp",
+    TargetType.UNITREE_G1            : "unitree_g1",
+    TargetType.ENGINEAI_PM01         : "engineai_pm01",
+    TargetType.HIGHTORQUE_PI_PLUS    : "hightorque_pi_plus",
+    TargetType.HIGHTORQUE_PI_PLUS_S  : "hightorque_pi_plus_s",
+    TargetType.PNDBOTICS_ADAM_LITE   : "pndbotics_adam_lite",
+    TargetType.PNDBOTICS_ADAM_SP     : "pndbotics_adam_sp",
 }
 _STR_TO_TARGET_TYPE = {s : t for t, s in _TARGET_TYPE_TO_STR.items()}
 
 # Per-robot relative MJCF path under assets/robots/<robot_type>/ (and inside
 # Newton's downloadable asset bundle, which uses the same layout).
 _ROBOT_MJCF_RELATIVE_PATH = {
-    "unitree_g1":          "mjcf/g1_29dof_rev_1_0.xml",
-    "engineai_pm01":       "pm.xml",
-    "hightorque_pi_plus":  "xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml",
-    "pndbotics_adam_lite": "adam_lite.xml",
-    "pndbotics_adam_sp":   "adam_sp.xml",
+    "unitree_g1":           "mjcf/g1_29dof_rev_1_0.xml",
+    "engineai_pm01":        "pm.xml",
+    "hightorque_pi_plus":   "xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml",
+    "hightorque_pi_plus_s": "xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml",
+    "pndbotics_adam_lite":  "adam_lite.xml",
+    "pndbotics_adam_sp":    "adam_sp.xml",
 }
 
 # Initial base Z height (metres) for URDF-based robots. MJCF files encode
@@ -73,20 +80,26 @@ _RETARGETER_CONFIG_FILENAME = {
     (SourceType.SOMA, "unitree_g1"):          "soma/soma_to_g1_retargeter_config.json",
     (SourceType.SOMA, "engineai_pm01"):       "soma/soma_to_pm01_retargeter_config.json",
     (SourceType.SOMA, "hightorque_pi_plus"):  "soma/soma_to_pi_plus_retargeter_config.json",
+    (SourceType.SOMA, "hightorque_pi_plus_s"): "soma/soma_to_pi_plus_s_retargeter_config.json",
     (SourceType.SOMA, "pndbotics_adam_lite"): "soma/soma_to_adam_lite_retargeter_config.json",
     (SourceType.SOMA, "pndbotics_adam_sp"):   "soma/soma_to_adam_sp_retargeter_config.json",
     # Native skeleton (route A): retarget straight from your own joint names.
     (SourceType.MYDATA, "unitree_g1"):          "mydata/mydata_to_g1_retargeter_config.json",
     (SourceType.MYDATA, "engineai_pm01"):       "mydata/mydata_to_pm01_retargeter_config.json",
     (SourceType.MYDATA, "hightorque_pi_plus"):  "mydata/mydata_to_pi_plus_retargeter_config.json",
+    (SourceType.MYDATA, "hightorque_pi_plus_s"): "mydata/mydata_to_pi_plus_s_retargeter_config.json",
     (SourceType.MYDATA, "pndbotics_adam_lite"): "mydata/mydata_to_adam_lite_retargeter_config.json",
     (SourceType.MYDATA, "pndbotics_adam_sp"):   "mydata/mydata_to_adam_sp_retargeter_config.json",
     # Second native skeleton variant with its own calibration configs.
     (SourceType.MYDATA2, "unitree_g1"):          "mydata2/mydata2_to_g1_retargeter_config.json",
     (SourceType.MYDATA2, "engineai_pm01"):       "mydata2/mydata2_to_pm01_retargeter_config.json",
     (SourceType.MYDATA2, "hightorque_pi_plus"):  "mydata2/mydata2_to_pi_plus_retargeter_config.json",
+    (SourceType.MYDATA2, "hightorque_pi_plus_s"): "mydata2/mydata2_to_pi_plus_s_retargeter_config.json",
     (SourceType.MYDATA2, "pndbotics_adam_lite"): "mydata2/mydata2_to_adam_lite_retargeter_config.json",
     (SourceType.MYDATA2, "pndbotics_adam_sp"):   "mydata2/mydata2_to_adam_sp_retargeter_config.json",
+    # LAFAN1 dataset skeleton. Currently only wired up for hightorque_pi_plus_s;
+    # add more (source, robot) rows here (+ matching configs) to extend it.
+    (SourceType.LAFAN1, "hightorque_pi_plus_s"): "lafan1/lafan1_to_pi_plus_s_retargeter_config.json",
 }
 
 
@@ -164,6 +177,8 @@ _SOURCE_FACING_DIRECTION = {
     SourceType.MYDATA  : "Newton",
     # mydata2 is a standard Y-up BVH (same convention as SOMA/Mujoco).
     SourceType.MYDATA2 : "Mujoco",
+    # LAFAN1 is also a standard Y-up BVH.
+    SourceType.LAFAN1  : "Mujoco",
 }
 _SOURCE_POSITION_SCALE = {
     SourceType.SOMA    : 1.0,
@@ -171,6 +186,8 @@ _SOURCE_POSITION_SCALE = {
     # mydata2 is a standard centimetre-scale BVH; the built-in ×0.01 already
     # converts it to metres, so no extra scale factor is needed.
     SourceType.MYDATA2 : 1.0,
+    # LAFAN1 is also a standard centimetre-scale BVH; no extra scale needed.
+    SourceType.LAFAN1  : 1.0,
 }
 # SOMA clips are authored at the origin; native clips carry a world offset, so
 # recenter them horizontally to behave the same.
@@ -184,14 +201,20 @@ _SOURCE_RECENTER_XY = {
     SourceType.SOMA    : False,
     SourceType.MYDATA  : True,
     SourceType.MYDATA2 : False,
+    SourceType.LAFAN1  : False,
 }
 # Extra yaw (deg, about up axis) to align the source's forward with the robot.
 # mydata is captured back-to-back with the robot, so flip it 180 deg.
 # mydata2 uses the same facing direction as SOMA (no extra flip needed).
+# lafan1's own rig has a different native forward axis than SOMA/mydata2 (+X
+# in its own Y-up frame vs their +Z), which the Mujoco facing conversion maps
+# to Newton +X instead of the -Y that SOMA/mydata2 end up facing -- this -90
+# deg yaw rotates it to match that same -Y convention.
 _SOURCE_YAW_OFFSET_DEG = {
     SourceType.SOMA    : 0.0,
     SourceType.MYDATA  : 180.0,
     SourceType.MYDATA2 : 0.0,
+    SourceType.LAFAN1  : -90.0,
 }
 
 
