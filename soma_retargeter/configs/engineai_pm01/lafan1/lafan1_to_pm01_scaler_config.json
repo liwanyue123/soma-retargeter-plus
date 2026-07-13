@@ -1,0 +1,38 @@
+{
+    "_comment": "STARTER scaler config for lafan1 -> engineai_pm01. LAFAN1 spine: Hips->Spine->Spine1->Spine2->Neck. joint_scales are 1.0 and must be calibrated via the in-app Calibration panel.",
+    "robot_type": "engineai_pm01",
+    "human_root_name": "Hips",
+    "human_height_assumption": 1.8,
+    "joint_scales": {
+        "Hips": 1.1485,
+        "Spine2": 0.3256,
+        "LeftUpLeg": 1.9097,
+        "RightUpLeg": 1.9097,
+        "LeftLeg": 1.1795,
+        "RightLeg": 1.1795,
+        "LeftFoot": 1.1592,
+        "RightFoot": 1.1592,
+        "LeftArm": 0.7868,
+        "RightArm": 0.7868,
+        "LeftForeArm": 1.1721,
+        "RightForeArm": 1.172,
+        "LeftHand": 1.0471,
+        "RightHand": 1.0495
+    },
+    "joint_parents": {
+        "Hips": "",
+        "Spine2": "Hips",
+        "LeftUpLeg": "Hips",
+        "RightUpLeg": "Hips",
+        "LeftLeg": "LeftUpLeg",
+        "RightLeg": "RightUpLeg",
+        "LeftFoot": "LeftLeg",
+        "RightFoot": "RightLeg",
+        "LeftArm": "Spine2",
+        "RightArm": "Spine2",
+        "LeftForeArm": "LeftArm",
+        "RightForeArm": "RightArm",
+        "LeftHand": "LeftForeArm",
+        "RightHand": "RightForeArm"
+    }
+}

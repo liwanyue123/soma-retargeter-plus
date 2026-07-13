@@ -143,12 +143,22 @@ class NewtonPipeline:
             # use it as the standing reference for root-only amplitude scaling.
             self.human_robot_scaler.set_amplitude_reference(init_local0[0][0:3])
             # Standing effector positions are the reference for full-body scaling.
-            # Build the instance on the scaler's own skeleton object (the init pose
-            # shares the source's joint structure) so the effector computation's
-            # skeleton-identity check passes.
+            # Build the instance on the scaler's own skeleton object so the effector
+            # computation's skeleton-identity check passes. The init pose may carry a
+            # different joint set than the motion clips (e.g. with/without finger
+            # joints), so remap its locals by joint name; joints absent from the init
+            # pose keep the scaler skeleton's reference pose.
+            scaler_skeleton = self.human_robot_scaler.skeleton
+            init_index_map = np.fromiter(
+                (init_skel.joint_index(name) for name in scaler_skeleton.joint_names),
+                dtype=np.int32,
+                count=scaler_skeleton.num_joints)
+            init_mask = init_index_map != -1
+            ref_local0 = scaler_skeleton.reference_local_transforms
+            ref_local0[init_mask] = init_local0[init_index_map[init_mask]]
             ref_instance = SkeletonInstance(
-                self.human_robot_scaler.skeleton, [0, 0, 0], wp.transform_identity())
-            ref_instance.set_local_transforms(init_local0)
+                scaler_skeleton, [0, 0, 0], wp.transform_identity())
+            ref_instance.set_local_transforms(ref_local0)
             ref_effectors = self.human_robot_scaler.compute_effectors_from_skeleton(
                 ref_instance, True)
             self.human_robot_scaler.set_effector_reference(ref_effectors[:, 0:3])

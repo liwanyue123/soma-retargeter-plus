@@ -77,7 +77,7 @@ class Viewer:
         self.playback_loop       = True
         self.playback_total_time = 0.0
 
-        self.retarget_source_options = ['soma', 'mydata', 'mydata2', 'lafan1']
+        self.retarget_source_options = ['soma', 'mydata', 'mydata2', 'mydata4', 'lafan1']
         if self.source_str not in self.retarget_source_options:
             self.retarget_source_options.append(self.source_str)
         self.retarget_target_options = [

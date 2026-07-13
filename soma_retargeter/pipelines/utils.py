@@ -19,7 +19,17 @@ class SourceType(IntEnum):
     # Second native skeleton variant. Same coordinate conventions as MYDATA but
     # with its own calibration configs (scaler / offsets) so the two datasets
     # can be retargeted independently. Selected via `--data mydata2`.
+    # Fingerless clips with the same Mixamo-style spine (e.g.
+    # dataset/my_data2/PM_dance_002_han.bvh, 21 joints) also load as MYDATA2:
+    # init-pose locals are remapped by joint name, so the missing finger
+    # chains are simply skipped.
     MYDATA2 = auto()
+    # Fourth native skeleton variant (e.g. dataset/my_data4/kongfang_take_002.bvh): same
+    # 60-joint naming as MYDATA (Spine..Spine3, fingers, ToeBase) but a
+    # different coordinate convention -- standard Y-up centimetre BVH whose
+    # rest pose lays every bone along local +Z (rotations encode the whole
+    # pose). Selected via `--data mydata4`.
+    MYDATA4 = auto()
     # LAFAN1 dataset skeleton (Y-up, standard-centimetre BVH, Mixamo/LAFAN1
     # joint names, no fingers). Selected via `--data lafan1`.
     LAFAN1 = auto()
@@ -38,6 +48,7 @@ _SOURCE_TYPE_TO_STR = {
     SourceType.SOMA    : "soma",
     SourceType.MYDATA  : "mydata",
     SourceType.MYDATA2 : "mydata2",
+    SourceType.MYDATA4 : "mydata4",
     SourceType.LAFAN1  : "lafan1",
 }
 _STR_TO_SOURCE_TYPE = {s : t for t, s in _SOURCE_TYPE_TO_STR.items()}
@@ -97,9 +108,16 @@ _RETARGETER_CONFIG_FILENAME = {
     (SourceType.MYDATA2, "hightorque_pi_plus_s"): "mydata2/mydata2_to_pi_plus_s_retargeter_config.json",
     (SourceType.MYDATA2, "pndbotics_adam_lite"): "mydata2/mydata2_to_adam_lite_retargeter_config.json",
     (SourceType.MYDATA2, "pndbotics_adam_sp"):   "mydata2/mydata2_to_adam_sp_retargeter_config.json",
-    # LAFAN1 dataset skeleton. Currently only wired up for hightorque_pi_plus_s;
-    # add more (source, robot) rows here (+ matching configs) to extend it.
+    (SourceType.MYDATA4, "unitree_g1"):          "mydata4/mydata4_to_g1_retargeter_config.json",
+    (SourceType.MYDATA4, "engineai_pm01"):       "mydata4/mydata4_to_pm01_retargeter_config.json",
+    (SourceType.MYDATA4, "hightorque_pi_plus"):  "mydata4/mydata4_to_pi_plus_retargeter_config.json",
+    (SourceType.MYDATA4, "hightorque_pi_plus_s"): "mydata4/mydata4_to_pi_plus_s_retargeter_config.json",
+    (SourceType.MYDATA4, "pndbotics_adam_lite"): "mydata4/mydata4_to_adam_lite_retargeter_config.json",
+    (SourceType.MYDATA4, "pndbotics_adam_sp"):   "mydata4/mydata4_to_adam_sp_retargeter_config.json",
+    # LAFAN1 dataset skeleton. Add more (source, robot) rows here (+ matching
+    # configs) to extend it.
     (SourceType.LAFAN1, "hightorque_pi_plus_s"): "lafan1/lafan1_to_pi_plus_s_retargeter_config.json",
+    (SourceType.LAFAN1, "engineai_pm01"):       "lafan1/lafan1_to_pm01_retargeter_config.json",
 }
 
 
@@ -177,6 +195,9 @@ _SOURCE_FACING_DIRECTION = {
     SourceType.MYDATA  : "Newton",
     # mydata2 is a standard Y-up BVH (same convention as SOMA/Mujoco).
     SourceType.MYDATA2 : "Mujoco",
+    # mydata4 (kongfang) is also a standard Y-up BVH; the bones-along-+Z rest
+    # pose is a rig-internal detail that FK resolves, not a world convention.
+    SourceType.MYDATA4 : "Mujoco",
     # LAFAN1 is also a standard Y-up BVH.
     SourceType.LAFAN1  : "Mujoco",
 }
@@ -186,6 +207,8 @@ _SOURCE_POSITION_SCALE = {
     # mydata2 is a standard centimetre-scale BVH; the built-in ×0.01 already
     # converts it to metres, so no extra scale factor is needed.
     SourceType.MYDATA2 : 1.0,
+    # mydata4 is centimetre-scale too (~157 cm standing height in file units).
+    SourceType.MYDATA4 : 1.0,
     # LAFAN1 is also a standard centimetre-scale BVH; no extra scale needed.
     SourceType.LAFAN1  : 1.0,
 }
@@ -201,6 +224,7 @@ _SOURCE_RECENTER_XY = {
     SourceType.SOMA    : False,
     SourceType.MYDATA  : True,
     SourceType.MYDATA2 : False,
+    SourceType.MYDATA4 : False,
     SourceType.LAFAN1  : False,
 }
 # Extra yaw (deg, about up axis) to align the source's forward with the robot.
@@ -214,6 +238,9 @@ _SOURCE_YAW_OFFSET_DEG = {
     SourceType.SOMA    : 0.0,
     SourceType.MYDATA  : 180.0,
     SourceType.MYDATA2 : 0.0,
+    # mydata4 faces -Z in its Y-up frame (toes/left-right placement in the
+    # capture confirm it), opposite of SOMA/mydata2's +Z, so flip it 180 deg.
+    SourceType.MYDATA4 : 180.0,
     SourceType.LAFAN1  : -90.0,
 }
 
