@@ -19,11 +19,13 @@ class SourceType(IntEnum):
     # Second native skeleton variant. Same coordinate conventions as MYDATA but
     # with its own calibration configs (scaler / offsets) so the two datasets
     # can be retargeted independently. Selected via `--data mydata2`.
-    # Fingerless clips with the same Mixamo-style spine (e.g.
-    # dataset/my_data2/PM_dance_002_han.bvh, 21 joints) also load as MYDATA2:
-    # init-pose locals are remapped by joint name, so the missing finger
-    # chains are simply skipped.
     MYDATA2 = auto()
+    # Fingerless Mixamo-style spine, 21 joints (e.g.
+    # dataset/my_data3/PM_dance_002_han.bvh). Joint names are a strict subset
+    # of MYDATA2's, but the actor's proportions differ substantially
+    # (shoulders/torso ~1.4x vs near-equal legs), so it carries its own init
+    # pose + calibration. Selected via `--data mydata3`.
+    MYDATA3 = auto()
     # Fourth native skeleton variant (e.g. dataset/my_data4/kongfang_take_002.bvh): same
     # 60-joint naming as MYDATA (Spine..Spine3, fingers, ToeBase) but a
     # different coordinate convention -- standard Y-up centimetre BVH whose
@@ -48,6 +50,7 @@ _SOURCE_TYPE_TO_STR = {
     SourceType.SOMA    : "soma",
     SourceType.MYDATA  : "mydata",
     SourceType.MYDATA2 : "mydata2",
+    SourceType.MYDATA3 : "mydata3",
     SourceType.MYDATA4 : "mydata4",
     SourceType.LAFAN1  : "lafan1",
 }
@@ -68,7 +71,7 @@ _STR_TO_TARGET_TYPE = {s : t for t, s in _TARGET_TYPE_TO_STR.items()}
 _ROBOT_MJCF_RELATIVE_PATH = {
     "unitree_g1":           "mjcf/g1_29dof_rev_1_0.xml",
     "engineai_pm01":        "pm.xml",
-    "hightorque_pi_plus":   "xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml",
+    "hightorque_pi_plus":   "xml/PiPlus_S_12L8A0G2H0W.xml",
     "hightorque_pi_plus_s": "xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml",
     "pndbotics_adam_lite":  "adam_lite.xml",
     "pndbotics_adam_sp":    "adam_sp.xml",
@@ -108,6 +111,13 @@ _RETARGETER_CONFIG_FILENAME = {
     (SourceType.MYDATA2, "hightorque_pi_plus_s"): "mydata2/mydata2_to_pi_plus_s_retargeter_config.json",
     (SourceType.MYDATA2, "pndbotics_adam_lite"): "mydata2/mydata2_to_adam_lite_retargeter_config.json",
     (SourceType.MYDATA2, "pndbotics_adam_sp"):   "mydata2/mydata2_to_adam_sp_retargeter_config.json",
+    (SourceType.MYDATA3, "unitree_g1"):          "mydata3/mydata3_to_g1_retargeter_config.json",
+    (SourceType.MYDATA3, "engineai_pm01"):       "mydata3/mydata3_to_pm01_retargeter_config.json",
+    (SourceType.MYDATA3, "hightorque_pi_plus"):  "mydata3/mydata3_to_pi_plus_retargeter_config.json",
+    (SourceType.MYDATA3, "hightorque_pi_plus_s"): "mydata3/mydata3_to_pi_plus_s_retargeter_config.json",
+    (SourceType.MYDATA3, "pndbotics_adam_lite"): "mydata3/mydata3_to_adam_lite_retargeter_config.json",
+    (SourceType.MYDATA3, "pndbotics_adam_sp"):   "mydata3/mydata3_to_adam_sp_retargeter_config.json",
+
     (SourceType.MYDATA4, "unitree_g1"):          "mydata4/mydata4_to_g1_retargeter_config.json",
     (SourceType.MYDATA4, "engineai_pm01"):       "mydata4/mydata4_to_pm01_retargeter_config.json",
     (SourceType.MYDATA4, "hightorque_pi_plus"):  "mydata4/mydata4_to_pi_plus_retargeter_config.json",
@@ -195,6 +205,8 @@ _SOURCE_FACING_DIRECTION = {
     SourceType.MYDATA  : "Newton",
     # mydata2 is a standard Y-up BVH (same convention as SOMA/Mujoco).
     SourceType.MYDATA2 : "Mujoco",
+    # mydata3 shares mydata2's conventions (Y-up standard BVH).
+    SourceType.MYDATA3 : "Mujoco",
     # mydata4 (kongfang) is also a standard Y-up BVH; the bones-along-+Z rest
     # pose is a rig-internal detail that FK resolves, not a world convention.
     SourceType.MYDATA4 : "Mujoco",
@@ -207,6 +219,7 @@ _SOURCE_POSITION_SCALE = {
     # mydata2 is a standard centimetre-scale BVH; the built-in ×0.01 already
     # converts it to metres, so no extra scale factor is needed.
     SourceType.MYDATA2 : 1.0,
+    SourceType.MYDATA3 : 1.0,
     # mydata4 is centimetre-scale too (~157 cm standing height in file units).
     SourceType.MYDATA4 : 1.0,
     # LAFAN1 is also a standard centimetre-scale BVH; no extra scale needed.
@@ -224,6 +237,7 @@ _SOURCE_RECENTER_XY = {
     SourceType.SOMA    : False,
     SourceType.MYDATA  : True,
     SourceType.MYDATA2 : False,
+    SourceType.MYDATA3 : False,
     SourceType.MYDATA4 : False,
     SourceType.LAFAN1  : False,
 }
@@ -238,6 +252,7 @@ _SOURCE_YAW_OFFSET_DEG = {
     SourceType.SOMA    : 0.0,
     SourceType.MYDATA  : 180.0,
     SourceType.MYDATA2 : 0.0,
+    SourceType.MYDATA3 : 0.0,
     # mydata4 faces -Z in its Y-up frame (toes/left-right placement in the
     # capture confirm it), opposite of SOMA/mydata2's +Z, so flip it 180 deg.
     SourceType.MYDATA4 : 180.0,

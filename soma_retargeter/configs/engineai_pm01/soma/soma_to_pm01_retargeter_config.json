@@ -47,8 +47,8 @@
             "r_weight" : 1.0
         },
         "LeftHand": {
-            "t_body" : "LINK_ELBOW_YAW_L",
-            "r_body" : "LINK_ELBOW_YAW_L",
+            "t_body" : "LINK_HAND_L",
+            "r_body" : "LINK_HAND_L",
             "t_weight" : 2.0,
             "r_weight" : 0.3
         },
@@ -65,8 +65,8 @@
             "r_weight" : 1.0
         },
         "RightHand": {
-            "t_body" : "LINK_ELBOW_YAW_R",
-            "r_body" : "LINK_ELBOW_YAW_R",
+            "t_body" : "LINK_HAND_R",
+            "r_body" : "LINK_HAND_R",
             "t_weight" : 2.0,
             "r_weight" : 0.3
         },

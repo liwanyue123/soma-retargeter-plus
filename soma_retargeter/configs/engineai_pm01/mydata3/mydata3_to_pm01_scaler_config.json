@@ -1,0 +1,38 @@
+{
+    "_comment": "STARTER scaler config for mydata3 -> engineai_pm01. mydata3 spine: Hips->Spine->Spine1->Neck (no Spine3). joint_scales are 1.0 and must be calibrated via the in-app Calibration panel.",
+    "robot_type": "engineai_pm01",
+    "human_root_name": "Hips",
+    "human_height_assumption": 1.8,
+    "joint_scales": {
+        "Hips": 1.1577,
+        "Spine1": 0.2925,
+        "LeftUpLeg": 1.993,
+        "RightUpLeg": 1.9931,
+        "LeftLeg": 1.3262,
+        "RightLeg": 1.3262,
+        "LeftFoot": 1.2301,
+        "RightFoot": 1.2301,
+        "LeftArm": 0.7311,
+        "RightArm": 0.7311,
+        "LeftForeArm": 0.7614,
+        "RightForeArm": 0.7614,
+        "LeftHand": 1.0317,
+        "RightHand": 1.0348
+    },
+    "joint_parents": {
+        "Hips": "",
+        "Spine1": "Hips",
+        "LeftUpLeg": "Hips",
+        "RightUpLeg": "Hips",
+        "LeftLeg": "LeftUpLeg",
+        "RightLeg": "RightUpLeg",
+        "LeftFoot": "LeftLeg",
+        "RightFoot": "RightLeg",
+        "LeftArm": "Spine1",
+        "RightArm": "Spine1",
+        "LeftForeArm": "LeftArm",
+        "RightForeArm": "RightArm",
+        "LeftHand": "LeftForeArm",
+        "RightHand": "RightForeArm"
+    }
+}

@@ -1,5 +1,5 @@
 {
-    "_comment": "HighTorque pi_plus_s (PiPlus_S_12L8A0G2H1W_LSE_260611) reference pose: independent 23-DOF robot, same model/proportions as hightorque_pi_plus. Joint order follows the MJCF body tree / physical kinematic order (waist right after the legs, before head/arms), matching hightorque_pi_plus. Adjust 'base_quat_xyzw' and joint angles in the GUI calibration panel to dial in correct alignment, then save back to this file via the 'Save Pose...' button.",
+    "_comment": "HighTorque pi_plus_s (PiPlus_S_12L8A0G2H1W_LSE_260611) reference pose: independent 23-DOF robot with 1-DOF waist (sibling of no-waist hightorque_pi_plus / H0W). Joint order follows the MJCF body tree / physical kinematic order (waist right after the legs, before head/arms). Adjust 'base_quat_xyzw' and joint angles in the GUI calibration panel to dial in correct alignment, then save back to this file via the 'Save Pose...' button.",
     "base_pos":  [0.0, 0.0, 0.385],
     "base_quat_xyzw": [0.0, 0.0, -0.7071068, 0.7071068],
     "joint_order": [

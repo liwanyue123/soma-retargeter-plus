@@ -1,0 +1,109 @@
+{
+    "_comment": "Route-A native-skeleton retargeter config (mydata3 -> hightorque_pi_plus_s). mydata3 is a Y-up (Mujoco) standard-centimetre BVH. Spine hierarchy: Hips->Spine->Spine1->Neck (no Spine2/3). ik_map uses Spine1 where mydata used Spine3. scaler / offsets must be calibrated via the in-app Calibration panel.",
+    "initialization_pose": "sources/mydata3/init_pose.bvh",
+    "num_initialization_frames": 10,
+    "num_stabilization_frames": 5,
+    "human_robot_scaler_config": "hightorque_pi_plus_s/mydata3/mydata3_to_pi_plus_s_scaler_config.json",
+    "joint_offsets_config": "hightorque_pi_plus_s/mydata3/mydata3_to_pi_plus_s_offsets_config.json",
+    "feet_stabilizer_config": "hightorque_pi_plus_s/pi_plus_s_feet_stabilizer_config.json",
+    "model_height": 0.8,
+    "ik_iterations": 24,
+    "joint_limit_weight": 10.0,
+    "smooth_joint_filter_weight": 5.5,
+    "collision_weight": 0.0,
+    "enable_post_processing": true,
+    "smooth_joint_filter_objective_body_masks": {
+        "l_shoulder_pitch_link": 0.1,
+        "l_shoulder_roll_link": 1.0,
+        "l_upper_arm_link": 0.3,
+        "r_shoulder_pitch_link": 0.1,
+        "r_shoulder_roll_link": 1.0,
+        "r_upper_arm_link": 0.3
+    },
+    "ik_map": {
+        "Hips": {
+            "t_body": "base_link",
+            "r_body": "base_link",
+            "t_weight": 2.0,
+            "r_weight": 1.0
+        },
+        "Spine1": {
+            "t_body": "base_link",
+            "r_body": "base_link",
+            "t_weight": 2.0,
+            "r_weight": 1.0
+        },
+        "LeftArm": {
+            "t_body": "l_shoulder_roll_link",
+            "r_body": "l_shoulder_roll_link",
+            "t_weight": 1.5,
+            "r_weight": 0.15
+        },
+        "LeftForeArm": {
+            "t_body": "l_upper_arm_link",
+            "r_body": "l_upper_arm_link",
+            "t_weight": 1.0,
+            "r_weight": 0.3
+        },
+        "LeftHand": {
+            "t_body": "l_elbow_link",
+            "r_body": "l_elbow_link",
+            "t_weight": 2.0,
+            "r_weight": 0.3
+        },
+        "RightArm": {
+            "t_body": "r_shoulder_roll_link",
+            "r_body": "r_shoulder_roll_link",
+            "t_weight": 1.5,
+            "r_weight": 0.15
+        },
+        "RightForeArm": {
+            "t_body": "r_upper_arm_link",
+            "r_body": "r_upper_arm_link",
+            "t_weight": 1.0,
+            "r_weight": 0.3
+        },
+        "RightHand": {
+            "t_body": "r_elbow_link",
+            "r_body": "r_elbow_link",
+            "t_weight": 2.0,
+            "r_weight": 0.3
+        },
+        "LeftUpLeg": {
+            "t_body": "l_hip_roll_link",
+            "r_body": "l_hip_roll_link",
+            "t_weight": 1.5,
+            "r_weight": 0.15
+        },
+        "LeftLeg": {
+            "t_body": "l_calf_link",
+            "r_body": "l_calf_link",
+            "t_weight": 1.0,
+            "r_weight": 1.0
+        },
+        "LeftFoot": {
+            "t_body": "l_ankle_roll_link",
+            "r_body": "l_ankle_roll_link",
+            "t_weight": 30.0,
+            "r_weight": 2.0
+        },
+        "RightUpLeg": {
+            "t_body": "r_hip_roll_link",
+            "r_body": "r_hip_roll_link",
+            "t_weight": 1.5,
+            "r_weight": 0.15
+        },
+        "RightLeg": {
+            "t_body": "r_calf_link",
+            "r_body": "r_calf_link",
+            "t_weight": 1.0,
+            "r_weight": 1.0
+        },
+        "RightFoot": {
+            "t_body": "r_ankle_roll_link",
+            "r_body": "r_ankle_roll_link",
+            "t_weight": 30.0,
+            "r_weight": 2.0
+        }
+    }
+}

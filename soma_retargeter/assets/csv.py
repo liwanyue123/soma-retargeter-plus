@@ -122,14 +122,18 @@ class EngineAIPM01_CSVConfig(_StandardCSVConfig):
 
 @dataclass
 class HighTorquePiPlus_CSVConfig(_StandardCSVConfig):
-    """23-DOF humanoid by HighTorque (1-DOF waist, no wrist, 2-DOF head)."""
-    name: str = "hightorque_pi_plus_23dof"
+    """22-DOF humanoid by HighTorque (no waist, no wrist, 2-DOF head).
+
+    Model: ``PiPlus_S_12L8A0G2H0W``. CSV / MJCF order is left-first, legs then
+    head then arms (matches local convention used across robots here). This is
+    intentionally different from the vendor MJCF body declaration order.
+    """
+    name: str = "hightorque_pi_plus_22dof"
     csv_header: ClassVar[List[str]] = _ROOT_HEADER + [
         "l_hip_pitch_joint", "l_hip_roll_joint", "l_thigh_joint",
         "l_calf_joint", "l_ankle_pitch_joint", "l_ankle_roll_joint",
         "r_hip_pitch_joint", "r_hip_roll_joint", "r_thigh_joint",
         "r_calf_joint", "r_ankle_pitch_joint", "r_ankle_roll_joint",
-        "waist_yaw_joint",
         "head_yaw_joint", "head_pitch_joint",
         "l_shoulder_pitch_joint", "l_shoulder_roll_joint",
         "l_upper_arm_joint", "l_elbow_joint",

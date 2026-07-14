@@ -36,8 +36,8 @@
         "LeftArm": {
             "t_body": "shoulderRollLeft",
             "r_body": "shoulderRollLeft",
-            "t_weight": 1.5,
-            "r_weight": 0.15
+            "t_weight": 0.0,
+            "r_weight": 0.0
         },
         "LeftForeArm": {
             "t_body": "elbowLeft",
@@ -54,8 +54,8 @@
         "RightArm": {
             "t_body": "shoulderRollRight",
             "r_body": "shoulderRollRight",
-            "t_weight": 1.5,
-            "r_weight": 0.15
+            "t_weight": 0.0,
+            "r_weight": 0.0
         },
         "RightForeArm": {
             "t_body": "elbowRight",

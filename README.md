@@ -15,8 +15,8 @@ The pipeline applies human-to-robot scaling, multi-objective IK with joint limit
 |-------------------|--------|--------|
 | `unitree_g1` | `assets/default_bvh_to_csv_converter_config.json` | Unitree G1 (29 DOF) |
 | `engineai_pm01` | `assets/pm01_bvh_to_csv_converter_config.json` | EngineAI PM01 (24 DOF) |
-| `hightorque_pi_plus` | `assets/pi_plus_bvh_to_csv_converter_config.json` | Hightorque Pi Plus (20 DOF) |
-| `hightorque_pi_plus_s` | `assets/pi_plus_s_bvh_to_csv_converter_config.json` | Hightorque Pi Plus S (23 DOF; same model as Pi Plus, independent robot) |
+| `hightorque_pi_plus` | `assets/pi_plus_bvh_to_csv_converter_config.json` | Hightorque Pi Plus (22 DOF; no waist) |
+| `hightorque_pi_plus_s` | `assets/pi_plus_s_bvh_to_csv_converter_config.json` | Hightorque Pi Plus S (23 DOF; 1-DOF waist) |
 | `pndbotics_adam_lite` | `assets/adam_lite_bvh_to_csv_converter_config.json` | PND Adam Lite (25 DOF) |
 | `pndbotics_adam_sp` | `assets/adam_sp_bvh_to_csv_converter_config.json` | PND Adam SP (29 DOF; 3-DOF waist, 7-DOF arms) |
 
@@ -214,11 +214,11 @@ python app/bvh_to_csv_converter.py \
   --viewer gl \
   --data lafan1
 
-# mydata2 fingerless variant (e.g. dataset/my_data2/PM_dance_002_han.bvh) -> EngineAI PM01
+# mydata3 fingerless Mixamo-style BVH (e.g. dataset/my_data3/PM_dance_002_han.bvh) -> EngineAI PM01
 python app/bvh_to_csv_converter.py \
   --config assets/pm01_bvh_to_csv_converter_config.json \
   --viewer gl \
-  --data mydata2
+  --data mydata3
 
 # mydata4 Y-up 60-joint BVH (e.g. dataset/my_data4/kongfang_take_002.bvh) -> Unitree G1
 python app/bvh_to_csv_converter.py \
@@ -241,10 +241,12 @@ source is mostly a matter of filling in tables + JSON configs.
 > **Calibration** panel once per robot to fill in real values (Adam Lite is already
 > calibrated; Adam SP's `mydata` configs are copied from Adam Lite and still need a
 > calibration pass). `lafan1` is wired up for `hightorque_pi_plus_s` and
-> `engineai_pm01` as uncalibrated starter configs. `mydata2` also covers the
-> fingerless Mixamo-style clips (21 joints, e.g. `PM_dance_002_han.bvh`):
-> the joint set is a strict subset of `mydata2`'s, and init-pose locals are
-> remapped by joint name, so no separate source type is needed.
+> `engineai_pm01` as uncalibrated starter configs. `mydata3` is the fingerless
+> Mixamo-style variant (21 joints, e.g. `dataset/my_data3/PM_dance_002_han.bvh`).
+> Its joint names are a strict subset of `mydata2`'s, but the actor is a
+> different build (~1.87 m, notably wider shoulders/torso), so it carries its
+> own init pose (`tools/gen_mydata3_init_pose.py`) and its own calibration;
+> its configs start as copies of `mydata2`'s and need a calibration pass.
 > `mydata4` shares `mydata`'s 60-joint naming (Spine..Spine3, fingers, ToeBase)
 > but uses a different coordinate convention — standard Y-up centimetre BVH
 > whose rest pose lays every bone along local +Z (e.g.
