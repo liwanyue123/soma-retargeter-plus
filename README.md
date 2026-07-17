@@ -7,6 +7,15 @@ Convert [SOMA](https://github.com/NVlabs/SOMA-X) human motion captures into huma
 
 The pipeline applies human-to-robot scaling, multi-objective IK with joint limits, feet stabilization, and per-DOF clamping.
 
+## What's new vs. the original soma-retargeter
+
+This fork (**soma-retargeter-plus**) extends the original in four areas:
+
+- **More robots** — adds Hightorque Pi Plus / Pi Plus S and PND Adam Lite / Adam SP on top of the original Unitree G1 and EngineAI PM01.
+- **More data sources** — retargets [LAFAN1](https://github.com/ubisoft/ubisoft-laforge-animation-dataset), the [Bones SEED](https://huggingface.co/datasets/bones-studio/seed) dataset, and self-captured mocap skeletons directly via `--data`, without converting them to the SOMA skeleton first.
+- **Proportion tuning** — live source position scale sliders (uniform + independent upper/lower body multipliers) for actors whose limb proportions don't match the robot, plus a **segmental scaling mode** that maps each limb segment to the robot's own segment length so IK targets always stay within reach.
+- **Scene objects** — place reference boxes in the viewport (for box-interaction motions), with save/load to JSON scene files.
+
 > **Note:** Active development — APIs and configs may change between releases.
 
 ## Supported robots
@@ -77,8 +86,6 @@ python -c "import newton, warp, soma_retargeter; print('OK')"
 
 Ten sample BVH/CSV pairs live under `assets/motions/` for smoke tests.
 
-For larger SOMA-skeleton datasets, see the [SEED dataset](https://huggingface.co/datasets/bones-studio/seed) ([Bones Studio](https://huggingface.co/bones-studio)). G1 motions in SEED were retargeted with this tool.
-
 ## Quick start
 
 ### Interactive viewer
@@ -115,7 +122,7 @@ To retarget your own (non-SOMA) skeleton directly, add `--data <source>` — see
 
 **Right Panels**
 
-- **Calibration (Compute Bias)** — match the robot zero pose to the source zero pose, then compute/write `joint_scales` and `joint_offsets` (see [Custom data](#custom-non-soma-data) for where each is stored per source). Enable *Calibration Mode* to freeze playback and edit joints.
+- **Calibration (Compute Bias)** — match the robot zero pose to the source zero pose, then compute/write `joint_scales` and `joint_offsets` (see [Custom data](#custom-non-soma-data) for where each is stored per source). Enable *Calibration Mode* to freeze playback and edit joints. The **Source Position Scale (live)** sliders rescale the source on the fly: `scale` is uniform, `upper body` / `lower body` multiply on top of it per joint group (root/hips + legs follow `lower body`, everything else `upper body`) — useful when the actor's arm/leg proportions don't match the robot. **Save scale to config** persists all three into the retargeter config. Note: recomputing scales *after* changing a source scale cancels its effect (calibration ratios absorb it), so either tune the sliders *without* recalibrating, or fix proportion mismatch properly with the segmental scaling mode below.
 - **Scene Objects** — place reference boxes in the viewport (size in meters, drag gizmo or type position). **Save…** / **Load…** writes a JSON scene file.
 
 ### Batch (headless)
@@ -164,6 +171,27 @@ python tools/calibrate_robot_offsets.py <robot_type> --scales --calc-pos --write
 
 Use the GUI calibration panel when tuning a new robot’s scaler config for the first time.
 
+### Scaling modes (proportion mismatch)
+
+The scaler config's optional `"scaling_mode"` selects how source joints map to robot IK targets:
+
+- `"geocentric"` (default) — target = root + (joint − root) × per-joint scalar. Simple, but a single scalar calibrated at the reference pose cannot match differing body proportions in every pose: a long-armed actor's hanging hands can map *above* the robot's natural hang, forcing folded elbows, and targets can land outside the robot's reach entirely (the arm saturates fully extended and stops responding to tuning).
+- `"segmental"` — target = parent target + (joint − parent) × per-**segment** length ratio (chained via the config's `joint_parents`). Every segment is remapped to the robot's own limb length, so targets stay reachable by construction and a hanging human arm maps to a hanging robot arm regardless of proportions.
+
+Set `"scaling_mode": "segmental"` in the scaler config, then recalibrate (the Calibration panel and `compute_scales`/`compute_offsets` read the mode automatically — `joint_scales` become segment length ratios instead of root-geocentric ratios). Existing configs without the key keep the exact legacy behavior.
+
+For headless runs, the live source-scale sliders map to the config keys `retarget_source_position_scale` (uniform), `retarget_source_position_scale_upper`, and `retarget_source_position_scale_lower` (group multipliers, default 1.0) — settable in the converter config or persisted into the retargeter config by **Save scale to config**.
+
+### Display quality (demo videos)
+
+Newton's mesh import welds vertices and smooths normals across sharp CAD edges, which makes dense STL robots look low-poly/melted in the GL viewer. For presentation renders, enable crease-aware visual normals:
+
+```bash
+SOMA_HQ_VISUALS=1 python app/bvh_to_csv_converter.py --config ... --viewer gl
+```
+
+Costs ~1.5 s extra load time per dense robot (visual-only rebuild; kinematics, collision, and retarget output are unaffected), so it stays off by default.
+
 ## Custom (non-SOMA) data
 
 You can retarget **your own mocap skeleton directly**, without first converting it to
@@ -172,33 +200,9 @@ proportions and introduces foot sliding/drift, even from clean source data). Sel
 custom source with the `--data` flag:
 
 ```bash
-# Unitree G1
+# Self-captured mocap skeleton -> Unitree G1 (same pattern for any robot: swap the config)
 python app/bvh_to_csv_converter.py \
   --config assets/default_bvh_to_csv_converter_config.json \
-  --viewer gl \
-  --data mydata
-
-# EngineAI PM01
-python app/bvh_to_csv_converter.py \
-  --config assets/pm01_bvh_to_csv_converter_config.json \
-  --viewer gl \
-  --data mydata
-
-# Hightorque Pi Plus
-python app/bvh_to_csv_converter.py \
-  --config assets/pi_plus_bvh_to_csv_converter_config.json \
-  --viewer gl \
-  --data mydata
-
-# PND Adam Lite
-python app/bvh_to_csv_converter.py \
-  --config assets/adam_lite_bvh_to_csv_converter_config.json \
-  --viewer gl \
-  --data mydata
-
-# PND Adam SP
-python app/bvh_to_csv_converter.py \
-  --config assets/adam_sp_bvh_to_csv_converter_config.json \
   --viewer gl \
   --data mydata
 
@@ -207,24 +211,6 @@ python app/bvh_to_csv_converter.py \
   --config assets/pi_plus_s_bvh_to_csv_converter_config.json \
   --viewer gl \
   --data lafan1
-
-# LAFAN1 dataset (dataset/lafan1/) -> EngineAI PM01
-python app/bvh_to_csv_converter.py \
-  --config assets/pm01_bvh_to_csv_converter_config.json \
-  --viewer gl \
-  --data lafan1
-
-# mydata3 fingerless Mixamo-style BVH (e.g. dataset/my_data3/PM_dance_002_han.bvh) -> EngineAI PM01
-python app/bvh_to_csv_converter.py \
-  --config assets/pm01_bvh_to_csv_converter_config.json \
-  --viewer gl \
-  --data mydata3
-
-# mydata4 Y-up 60-joint BVH (e.g. dataset/my_data4/kongfang_take_002.bvh) -> Unitree G1
-python app/bvh_to_csv_converter.py \
-  --config assets/default_bvh_to_csv_converter_config.json \
-  --viewer gl \
-  --data mydata4
 ```
 
 `--data <source>` switches the pipeline to a registered non-SOMA source. The source's
@@ -236,24 +222,15 @@ source is mostly a matter of filling in tables + JSON configs.
 
 > **Each `--data` source is wired up per robot.** Every `(source, robot)` pair has its own
 > entry in `_RETARGETER_CONFIG_FILENAME` plus a matching `ik_map` / scaler / offsets /
-> init-pose config. `mydata` ships with starter configs for all five robots above, but
-> their `joint_scales` / `joint_offsets` are still neutral placeholders — run the in-app
-> **Calibration** panel once per robot to fill in real values (Adam Lite is already
-> calibrated; Adam SP's `mydata` configs are copied from Adam Lite and still need a
-> calibration pass). `lafan1` is wired up for `hightorque_pi_plus_s` and
-> `engineai_pm01` as uncalibrated starter configs. `mydata3` is the fingerless
-> Mixamo-style variant (21 joints, e.g. `dataset/my_data3/PM_dance_002_han.bvh`).
-> Its joint names are a strict subset of `mydata2`'s, but the actor is a
-> different build (~1.87 m, notably wider shoulders/torso), so it carries its
-> own init pose (`tools/gen_mydata3_init_pose.py`) and its own calibration;
-> its configs start as copies of `mydata2`'s and need a calibration pass.
-> `mydata4` shares `mydata`'s 60-joint naming (Spine..Spine3, fingers, ToeBase)
-> but uses a different coordinate convention — standard Y-up centimetre BVH
-> whose rest pose lays every bone along local +Z (e.g.
-> `kongfang_take_002.bvh`); it ships uncalibrated starter configs for all
-> robots, with the init pose generated by `tools/gen_mydata4_init_pose.py`.
-> To add another robot or a brand-new
-> source, see [Adding a new source/robot pair](#custom-non-soma-data) below.
+> init-pose config. A new pair starts from neutral placeholders (`joint_scales` = 1.0,
+> identity `joint_offsets`) — run the in-app **Calibration** panel once per robot to fill
+> in real values. Several self-captured skeleton variants (different rigs / naming
+> conventions / coordinate conventions) are registered this way alongside `lafan1`; each
+> carries its own init pose (generated by the `tools/gen_*_init_pose.py` scripts) and its
+> own calibration. Pairs calibrated in **segmental** mode keep their previous geocentric
+> calibration in a `*_geocentric_calibration_backup.json` next to the configs. To add
+> another robot or a brand-new source, see
+> [Adding a new source/robot pair](#custom-non-soma-data) below.
 
 **Config split per source.** Configs live under `configs/<robot>/<source>/` (e.g.
 `configs/engineai_pm01/mydata/`), with the robot-level `<robot>_feet_stabilizer_config.json`
@@ -262,7 +239,7 @@ offsets* live in separate files so they can be regenerated independently:
 
 | File (under `configs/<robot>/<source>/`) | Holds |
 |------|-------|
-| `<source>_to_<robot>_scaler_config.json` | `joint_scales` (tracking) + `joint_parents` |
+| `<source>_to_<robot>_scaler_config.json` | `joint_scales` (tracking) + `joint_parents` + optional `scaling_mode` (`geocentric`/`segmental`) |
 | `<source>_to_<robot>_offsets_config.json` | `joint_offsets` (calibration result) |
 | `<source>_to_<robot>_retargeter_config.json` | `ik_map` (keyed by your joint names) + references the two files above via `human_robot_scaler_config` and `joint_offsets_config` |
 
@@ -304,20 +281,6 @@ config and are unaffected.
 | `tools/reference_poses/` | Per-robot calibration reference-pose JSON |
 | `soma_retargeter/renderers/` | Viewer drawing helpers |
 | `assets/robots/` | Robot MJCF / URDF / meshes |
-
-## Related work
-
-Part of the [SOMA](https://github.com/NVlabs/SOMA-X) ecosystem:
-
-- [SOMA Body Model](https://github.com/NVlabs/SOMA-X)
-- [GEM-X](https://github.com/NVlabs/GEM-X)
-- [Kimodo](https://github.com/nv-tlabs/kimodo)
-- [ProtoMotions](https://github.com/NVlabs/ProtoMotions)
-- [SONIC](https://nvlabs.github.io/GEAR-SONIC/)
-
-## Acknowledgments
-
-Inspired by [GMR](https://github.com/YanjieZe/GMR) and [PyRoki](https://pyroki-toolkit.github.io/).
 
 ## License
 

@@ -9,8 +9,9 @@ wheels/
 # Virtual Environments
 .venv
 
-# IDE
-.vscode/settings.json
+# IDE / assistant local config
+.vscode/
+.claude/
 
 # Log files, settings
 imgui.ini
