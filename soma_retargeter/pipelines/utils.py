@@ -43,6 +43,7 @@ class TargetType(IntEnum):
     """Enumeration of supported target model types."""
     UNITREE_G1 = auto()
     ENGINEAI_PM01 = auto()
+    ENGINEAI_T800 = auto()
     HIGHTORQUE_PI_PLUS = auto()
     HIGHTORQUE_PI_PLUS_S = auto()
     PNDBOTICS_ADAM_LITE = auto()
@@ -61,6 +62,7 @@ _STR_TO_SOURCE_TYPE = {s : t for t, s in _SOURCE_TYPE_TO_STR.items()}
 _TARGET_TYPE_TO_STR = {
     TargetType.UNITREE_G1            : "unitree_g1",
     TargetType.ENGINEAI_PM01         : "engineai_pm01",
+    TargetType.ENGINEAI_T800         : "engineai_t800",
     TargetType.HIGHTORQUE_PI_PLUS    : "hightorque_pi_plus",
     TargetType.HIGHTORQUE_PI_PLUS_S  : "hightorque_pi_plus_s",
     TargetType.PNDBOTICS_ADAM_LITE   : "pndbotics_adam_lite",
@@ -73,6 +75,7 @@ _STR_TO_TARGET_TYPE = {s : t for t, s in _TARGET_TYPE_TO_STR.items()}
 _ROBOT_MJCF_RELATIVE_PATH = {
     "unitree_g1":           "mjcf/g1_29dof_rev_1_0.xml",
     "engineai_pm01":        "pm.xml",
+    "engineai_t800":        "xml/serial_t800.xml",
     "hightorque_pi_plus":   "xml/PiPlus_S_12L8A0G2H0W.xml",
     "hightorque_pi_plus_s": "xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml",
     "pndbotics_adam_lite":  "adam_lite.xml",
@@ -95,6 +98,7 @@ _ROBOT_URDF_INITIAL_BASE_Z = {
 _RETARGETER_CONFIG_FILENAME = {
     (SourceType.SOMA, "unitree_g1"):          "soma/soma_to_g1_retargeter_config.json",
     (SourceType.SOMA, "engineai_pm01"):       "soma/soma_to_pm01_retargeter_config.json",
+    (SourceType.SOMA, "engineai_t800"):       "soma/soma_to_t800_retargeter_config.json",
     (SourceType.SOMA, "hightorque_pi_plus"):  "soma/soma_to_pi_plus_retargeter_config.json",
     (SourceType.SOMA, "hightorque_pi_plus_s"): "soma/soma_to_pi_plus_s_retargeter_config.json",
     (SourceType.SOMA, "pndbotics_adam_lite"): "soma/soma_to_adam_lite_retargeter_config.json",
@@ -115,6 +119,7 @@ _RETARGETER_CONFIG_FILENAME = {
     (SourceType.MYDATA2, "pndbotics_adam_sp"):   "mydata2/mydata2_to_adam_sp_retargeter_config.json",
     (SourceType.MYDATA3, "unitree_g1"):          "mydata3/mydata3_to_g1_retargeter_config.json",
     (SourceType.MYDATA3, "engineai_pm01"):       "mydata3/mydata3_to_pm01_retargeter_config.json",
+    (SourceType.MYDATA3, "engineai_t800"):       "mydata3/mydata3_to_t800_retargeter_config.json",
     (SourceType.MYDATA3, "hightorque_pi_plus"):  "mydata3/mydata3_to_pi_plus_retargeter_config.json",
     (SourceType.MYDATA3, "hightorque_pi_plus_s"): "mydata3/mydata3_to_pi_plus_s_retargeter_config.json",
     (SourceType.MYDATA3, "pndbotics_adam_lite"): "mydata3/mydata3_to_adam_lite_retargeter_config.json",

@@ -11,7 +11,7 @@ The pipeline applies human-to-robot scaling, multi-objective IK with joint limit
 
 This fork (**soma-retargeter-plus**) extends the original in four areas:
 
-- **More robots** — adds Hightorque Pi Plus / Pi Plus S and PND Adam Lite / Adam SP on top of the original Unitree G1 and EngineAI PM01.
+- **More robots** — adds EngineAI T800, Hightorque Pi Plus / Pi Plus S, and PND Adam Lite / Adam SP on top of the original Unitree G1 and EngineAI PM01.
 - **More data sources** — retargets [LAFAN1](https://github.com/ubisoft/ubisoft-laforge-animation-dataset), the [Bones SEED](https://huggingface.co/datasets/bones-studio/seed) dataset, and self-captured mocap skeletons directly via `--data`, without converting them to the SOMA skeleton first.
 - **Proportion tuning** — live source position scale sliders (uniform + independent upper/lower body multipliers) for actors whose limb proportions don't match the robot, plus a **segmental scaling mode** that maps each limb segment to the robot's own segment length so IK targets always stay within reach.
 - **Scene objects** — place reference boxes in the viewport (for box-interaction motions), with save/load to JSON scene files.
@@ -24,6 +24,7 @@ This fork (**soma-retargeter-plus**) extends the original in four areas:
 |-------------------|--------|--------|
 | `unitree_g1` | `assets/default_bvh_to_csv_converter_config.json` | Unitree G1 (29 DOF) |
 | `engineai_pm01` | `assets/pm01_bvh_to_csv_converter_config.json` | EngineAI PM01 (24 DOF) |
+| `engineai_t800` | `assets/t800_bvh_to_csv_converter_config.json` | EngineAI T800 (25 DOF; 1-DOF torso, 2-DOF head) |
 | `hightorque_pi_plus` | `assets/pi_plus_bvh_to_csv_converter_config.json` | Hightorque Pi Plus (22 DOF; no waist) |
 | `hightorque_pi_plus_s` | `assets/pi_plus_s_bvh_to_csv_converter_config.json` | Hightorque Pi Plus S (23 DOF; 1-DOF waist) |
 | `pndbotics_adam_lite` | `assets/adam_lite_bvh_to_csv_converter_config.json` | PND Adam Lite (25 DOF) |
@@ -104,6 +105,7 @@ Other robots — same command, different config:
 
 ```bash
 python app/bvh_to_csv_converter.py --config assets/pm01_bvh_to_csv_converter_config.json --viewer gl
+python app/bvh_to_csv_converter.py --config assets/t800_bvh_to_csv_converter_config.json --viewer gl
 python app/bvh_to_csv_converter.py --config assets/pi_plus_bvh_to_csv_converter_config.json --viewer gl
 python app/bvh_to_csv_converter.py --config assets/pi_plus_s_bvh_to_csv_converter_config.json --viewer gl
 python app/bvh_to_csv_converter.py --config assets/adam_lite_bvh_to_csv_converter_config.json --viewer gl

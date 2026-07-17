@@ -1,0 +1,111 @@
+{
+    "initialization_pose": "sources/soma/soma_zero_frame0.bvh",
+    "num_initialization_frames": 10,
+    "num_stabilization_frames": 5,
+    "human_robot_scaler_config": "engineai_t800/soma/soma_to_t800_scaler_config.json",
+    "feet_stabilizer_config": "engineai_t800/t800_feet_stabilizer_config.json",
+    "model_height": 1.65,
+    "ik_iterations": 24,
+    "joint_limit_weight": 10.0,
+    "smooth_joint_filter_weight": 5.5,
+    "collision_weight": 0.0,
+    "enable_post_processing": true,
+    "smooth_joint_filter_objective_body_masks": {
+        "LINK_SHOULDER_PITCH_L": 0.8,
+        "LINK_SHOULDER_ROLL_L": 1.0,
+        "LINK_SHOULDER_YAW_L": 0.3,
+        "LINK_SHOULDER_PITCH_R": 0.8,
+        "LINK_SHOULDER_ROLL_R": 1.0,
+        "LINK_SHOULDER_YAW_R": 0.3,
+        "LINK_ELBOW_PITCH_L": 0.5,
+        "LINK_ELBOW_PITCH_R": 0.5,
+        "LINK_ELBOW_YAW_L": 1.0,
+        "LINK_ELBOW_YAW_R": 1.0
+    },
+    "ik_map": {
+        "Hips": {
+            "t_body": "LINK_BASE",
+            "r_body": "LINK_BASE",
+            "t_weight": 2.0,
+            "r_weight": 1.0
+        },
+        "Chest": {
+            "t_body": "LINK_WAIST_YAW",
+            "r_body": "LINK_WAIST_YAW",
+            "t_weight": 2.0,
+            "r_weight": 1.0
+        },
+        "LeftArm": {
+            "t_body": "LINK_SHOULDER_ROLL_L",
+            "r_body": "LINK_SHOULDER_ROLL_L",
+            "t_weight": 1.5,
+            "r_weight": 0.15
+        },
+        "LeftForeArm": {
+            "t_body": "LINK_ELBOW_PITCH_L",
+            "r_body": "LINK_ELBOW_PITCH_L",
+            "t_weight": 1.0,
+            "r_weight": 0.3
+        },
+        "LeftHand": {
+            "t_body": "LINK_WRIST_END_L",
+            "r_body": "LINK_WRIST_END_L",
+            "t_weight": 2.0,
+            "r_weight": 0.3
+        },
+        "RightArm": {
+            "t_body": "LINK_SHOULDER_ROLL_R",
+            "r_body": "LINK_SHOULDER_ROLL_R",
+            "t_weight": 1.5,
+            "r_weight": 0.15
+        },
+        "RightForeArm": {
+            "t_body": "LINK_ELBOW_PITCH_R",
+            "r_body": "LINK_ELBOW_PITCH_R",
+            "t_weight": 1.0,
+            "r_weight": 0.3
+        },
+        "RightHand": {
+            "t_body": "LINK_WRIST_END_R",
+            "r_body": "LINK_WRIST_END_R",
+            "t_weight": 2.0,
+            "r_weight": 0.3
+        },
+        "LeftLeg": {
+            "t_body": "LINK_HIP_ROLL_L",
+            "r_body": "LINK_HIP_ROLL_L",
+            "t_weight": 1.5,
+            "r_weight": 0.15
+        },
+        "LeftShin": {
+            "t_body": "LINK_KNEE_PITCH_L",
+            "r_body": "LINK_KNEE_PITCH_L",
+            "t_weight": 1.0,
+            "r_weight": 1.0
+        },
+        "LeftFoot": {
+            "t_body": "LINK_ANKLE_ROLL_L",
+            "r_body": "LINK_ANKLE_ROLL_L",
+            "t_weight": 30.0,
+            "r_weight": 2.0
+        },
+        "RightLeg": {
+            "t_body": "LINK_HIP_ROLL_R",
+            "r_body": "LINK_HIP_ROLL_R",
+            "t_weight": 1.5,
+            "r_weight": 0.15
+        },
+        "RightShin": {
+            "t_body": "LINK_KNEE_PITCH_R",
+            "r_body": "LINK_KNEE_PITCH_R",
+            "t_weight": 1.0,
+            "r_weight": 1.0
+        },
+        "RightFoot": {
+            "t_body": "LINK_ANKLE_ROLL_R",
+            "r_body": "LINK_ANKLE_ROLL_R",
+            "t_weight": 30.0,
+            "r_weight": 2.0
+        }
+    }
+}

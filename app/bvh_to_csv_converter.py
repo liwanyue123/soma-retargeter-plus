@@ -92,6 +92,7 @@ class Viewer:
         self.retarget_target_options = [
             'unitree_g1',
             'engineai_pm01',
+            'engineai_t800',
             'hightorque_pi_plus',
             'hightorque_pi_plus_s',
             'pndbotics_adam_lite',

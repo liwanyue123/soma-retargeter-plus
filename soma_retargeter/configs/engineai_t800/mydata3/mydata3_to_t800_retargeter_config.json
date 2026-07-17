@@ -1,0 +1,116 @@
+{
+    "_comment": "Route-A native-skeleton retargeter config (mydata3 -> engineai_t800). mydata3 is a Y-up (Mujoco) standard-centimetre BVH. Spine hierarchy: Hips->Spine->Spine1->Neck (no Spine2/3). ik_map uses Spine1 where mydata used Spine3. scaler / offsets must be calibrated via the in-app Calibration panel.",
+    "initialization_pose": "sources/mydata3/init_pose.bvh",
+    "num_initialization_frames": 10,
+    "num_stabilization_frames": 5,
+    "human_robot_scaler_config": "engineai_t800/mydata3/mydata3_to_t800_scaler_config.json",
+    "joint_offsets_config": "engineai_t800/mydata3/mydata3_to_t800_offsets_config.json",
+    "feet_stabilizer_config": "engineai_t800/t800_feet_stabilizer_config.json",
+    "model_height": 1.65,
+    "ik_iterations": 24,
+    "joint_limit_weight": 10.0,
+    "smooth_joint_filter_weight": 5.5,
+    "collision_weight": 0.0,
+    "enable_post_processing": true,
+    "smooth_joint_filter_objective_body_masks": {
+        "LINK_SHOULDER_PITCH_L": 0.8,
+        "LINK_SHOULDER_ROLL_L": 1.0,
+        "LINK_SHOULDER_YAW_L": 0.3,
+        "LINK_SHOULDER_PITCH_R": 0.8,
+        "LINK_SHOULDER_ROLL_R": 1.0,
+        "LINK_SHOULDER_YAW_R": 0.3,
+        "LINK_ELBOW_PITCH_L": 0.5,
+        "LINK_ELBOW_PITCH_R": 0.5,
+        "LINK_ELBOW_YAW_L": 1.0,
+        "LINK_ELBOW_YAW_R": 1.0
+    },
+    "ik_map": {
+        "Hips": {
+            "t_body": "LINK_BASE",
+            "r_body": "LINK_BASE",
+            "t_weight": 2.0,
+            "r_weight": 1.0
+        },
+        "Spine1": {
+            "t_body": "LINK_WAIST_YAW",
+            "r_body": "LINK_WAIST_YAW",
+            "t_weight": 2.0,
+            "r_weight": 1.0
+        },
+        "LeftArm": {
+            "t_body": "LINK_SHOULDER_ROLL_L",
+            "r_body": "LINK_SHOULDER_ROLL_L",
+            "t_weight": 0.0,
+            "r_weight": 0.0
+        },
+        "LeftForeArm": {
+            "t_body": "LINK_ELBOW_PITCH_L",
+            "r_body": "LINK_ELBOW_PITCH_L",
+            "t_weight": 1.5,
+            "r_weight": 0.8
+        },
+        "LeftHand": {
+            "t_body": "LINK_WRIST_END_L",
+            "r_body": "LINK_WRIST_END_L",
+            "t_weight": 2.0,
+            "r_weight": 0.3
+        },
+        "RightArm": {
+            "t_body": "LINK_SHOULDER_ROLL_R",
+            "r_body": "LINK_SHOULDER_ROLL_R",
+            "t_weight": 0.0,
+            "r_weight": 0.0
+        },
+        "RightForeArm": {
+            "t_body": "LINK_ELBOW_PITCH_R",
+            "r_body": "LINK_ELBOW_PITCH_R",
+            "t_weight": 1.5,
+            "r_weight": 0.8
+        },
+        "RightHand": {
+            "t_body": "LINK_WRIST_END_R",
+            "r_body": "LINK_WRIST_END_R",
+            "t_weight": 2.0,
+            "r_weight": 0.3
+        },
+        "LeftUpLeg": {
+            "t_body": "LINK_HIP_ROLL_L",
+            "r_body": "LINK_HIP_ROLL_L",
+            "t_weight": 1.5,
+            "r_weight": 0.15
+        },
+        "LeftLeg": {
+            "t_body": "LINK_KNEE_PITCH_L",
+            "r_body": "LINK_KNEE_PITCH_L",
+            "t_weight": 1.0,
+            "r_weight": 1.0
+        },
+        "LeftFoot": {
+            "t_body": "LINK_ANKLE_ROLL_L",
+            "r_body": "LINK_ANKLE_ROLL_L",
+            "t_weight": 30.0,
+            "r_weight": 2.0
+        },
+        "RightUpLeg": {
+            "t_body": "LINK_HIP_ROLL_R",
+            "r_body": "LINK_HIP_ROLL_R",
+            "t_weight": 1.5,
+            "r_weight": 0.15
+        },
+        "RightLeg": {
+            "t_body": "LINK_KNEE_PITCH_R",
+            "r_body": "LINK_KNEE_PITCH_R",
+            "t_weight": 1.0,
+            "r_weight": 1.0
+        },
+        "RightFoot": {
+            "t_body": "LINK_ANKLE_ROLL_R",
+            "r_body": "LINK_ANKLE_ROLL_R",
+            "t_weight": 30.0,
+            "r_weight": 2.0
+        }
+    },
+    "retarget_source_position_scale": 1.0,
+    "retarget_source_position_scale_upper": 1.0,
+    "retarget_source_position_scale_lower": 1.0
+}

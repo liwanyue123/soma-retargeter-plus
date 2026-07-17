@@ -121,6 +121,27 @@ class EngineAIPM01_CSVConfig(_StandardCSVConfig):
 
 
 @dataclass
+class EngineAIT800_CSVConfig(_StandardCSVConfig):
+    """25-DOF humanoid by EngineAI (1-DOF torso yaw, 2-DOF head, no wrist roll).
+
+    Same joint naming scheme as PM01; adds head pitch. CSV order matches the
+    MJCF declaration order, which is already left-first, legs-then-arms.
+    """
+    name: str = "engineai_t800_25dof"
+    csv_header: ClassVar[List[str]] = _ROOT_HEADER + [
+        "J00_HIP_PITCH_L", "J01_HIP_ROLL_L", "J02_HIP_YAW_L",
+        "J03_KNEE_PITCH_L", "J04_ANKLE_PITCH_L", "J05_ANKLE_ROLL_L",
+        "J06_HIP_PITCH_R", "J07_HIP_ROLL_R", "J08_HIP_YAW_R",
+        "J09_KNEE_PITCH_R", "J10_ANKLE_PITCH_R", "J11_ANKLE_ROLL_R",
+        "J12_TORSO_YAW",
+        "J13_SHOULDER_PITCH_L", "J14_SHOULDER_ROLL_L", "J15_SHOULDER_YAW_L",
+        "J16_ELBOW_PITCH_L", "J17_ELBOW_YAW_L",
+        "J18_SHOULDER_PITCH_R", "J19_SHOULDER_ROLL_R", "J20_SHOULDER_YAW_R",
+        "J21_ELBOW_PITCH_R", "J22_ELBOW_YAW_R",
+        "J23_HEAD_PITCH", "J24_HEAD_YAW"]
+
+
+@dataclass
 class HighTorquePiPlus_CSVConfig(_StandardCSVConfig):
     """22-DOF humanoid by HighTorque (no waist, no wrist, 2-DOF head).
 
@@ -206,6 +227,7 @@ class PNDboticsAdamSp_CSVConfig(_StandardCSVConfig):
 _ROBOT_CSV_CONFIGS = {
     "unitree_g1":           UnitreeG129DOF_CSVConfig,
     "engineai_pm01":        EngineAIPM01_CSVConfig,
+    "engineai_t800":        EngineAIT800_CSVConfig,
     "hightorque_pi_plus":   HighTorquePiPlus_CSVConfig,
     "hightorque_pi_plus_s": HighTorquePiPlusS_CSVConfig,
     "pndbotics_adam_lite":  PNDboticsAdamLite_CSVConfig,

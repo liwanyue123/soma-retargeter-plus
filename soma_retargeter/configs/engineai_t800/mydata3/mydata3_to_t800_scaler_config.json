@@ -1,0 +1,39 @@
+{
+    "_comment": "Scaler config for mydata3 -> engineai_t800. scaling_mode=segmental: joint_scales are per-SEGMENT length ratios (child = parent_effector + segment*scale), calibrated from tools/reference_poses/engineai_t800_reference_pose.json + sources/mydata3/init_pose.bvh. Recompute via the in-app Calibration panel (it reads scaling_mode automatically).",
+    "robot_type": "engineai_t800",
+    "human_root_name": "Hips",
+    "human_height_assumption": 1.8,
+    "joint_scales": {
+        "Hips": 1.2401,
+        "Spine1": 0.3166,
+        "LeftArm": 1.3331,
+        "LeftForeArm": 0.9478,
+        "LeftHand": 1.1134,
+        "RightArm": 1.3331,
+        "RightForeArm": 0.9478,
+        "RightHand": 1.1166,
+        "LeftUpLeg": 1.7179,
+        "LeftLeg": 1.0303,
+        "LeftFoot": 1.231,
+        "RightUpLeg": 1.7179,
+        "RightLeg": 1.0303,
+        "RightFoot": 1.231
+    },
+    "joint_parents": {
+        "Hips": "",
+        "Spine1": "Hips",
+        "LeftUpLeg": "Hips",
+        "RightUpLeg": "Hips",
+        "LeftLeg": "LeftUpLeg",
+        "RightLeg": "RightUpLeg",
+        "LeftFoot": "LeftLeg",
+        "RightFoot": "RightLeg",
+        "LeftArm": "Spine1",
+        "RightArm": "Spine1",
+        "LeftForeArm": "LeftArm",
+        "RightForeArm": "RightArm",
+        "LeftHand": "LeftForeArm",
+        "RightHand": "RightForeArm"
+    },
+    "scaling_mode": "segmental"
+}
