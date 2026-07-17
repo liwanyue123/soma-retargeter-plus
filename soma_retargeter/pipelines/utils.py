@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from enum import IntEnum, auto
 from pathlib import Path
 
 import warp as wp
 
 import soma_retargeter.utils.io_utils as io_utils
+import soma_retargeter.utils.newton_utils as newton_utils
 import soma_retargeter.assets.usd as usd_utils
 
 
@@ -193,6 +195,14 @@ def add_robot_model(builder, robot_type: str) -> None:
         builder.add_urdf(path, floating=True, xform=xform)
     else:
         builder.add_mjcf(path)
+
+    # Newton's trimesh import welds vertices and smooths normals across sharp
+    # CAD edges, which makes STL robots look low-poly in the GL viewer.
+    # SOMA_HQ_VISUALS=1 rebuilds visual meshes with crease-aware normals for
+    # presentation renders; the default skips it to keep loading fast (~1.5s
+    # saved on a dense robot) since it is purely cosmetic.
+    if os.environ.get("SOMA_HQ_VISUALS", "0") == "1":
+        newton_utils.sharpen_visual_mesh_normals(builder)
 
 
 # Per-source coordinate convention + unit scale defaults. SOMA mocap is Y-up

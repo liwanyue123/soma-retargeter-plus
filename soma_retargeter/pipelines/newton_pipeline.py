@@ -35,7 +35,8 @@ class NewtonPipeline:
     custom objectives, and optional post-processing filters such as
     joint limit clamping and feet stabilization.
     """
-    def __init__(self, skeleton: Skeleton, source_type='soma', robot_type='unitree_g1', retarget_config: dict = None, source_position_scale: float = None):
+    def __init__(self, skeleton: Skeleton, source_type='soma', robot_type='unitree_g1', retarget_config: dict = None, source_position_scale: float = None,
+                 source_position_scale_upper: float = 1.0, source_position_scale_lower: float = 1.0):
         """
         Initialize the Newton retargeting pipeline.
 
@@ -134,7 +135,9 @@ class NewtonPipeline:
             init_pose_recenter = pipeline_utils.get_source_recenter_xy(self.source_type)
             init_skel, init_anim = bvh_utils.load_bvh(
                 io_utils.get_config_file(retargeter_config['initialization_pose']),
-                position_scale=init_pose_scale, recenter_xy=init_pose_recenter)
+                position_scale=init_pose_scale, recenter_xy=init_pose_recenter,
+                position_scale_upper=source_position_scale_upper,
+                position_scale_lower=source_position_scale_lower)
             self.initialization_pose = SkeletonInstance(init_skel, [0, 0, 0], wp.transform_identity())
             init_local0 = init_anim.get_local_transforms(0)
             self.initialization_pose.set_local_transforms(init_local0)

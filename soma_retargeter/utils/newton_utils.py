@@ -9,6 +9,102 @@ from soma_retargeter.animation.animation_buffer import AnimationBuffer
 from soma_retargeter.animation.skeleton import SkeletonInstance
 
 
+def _split_normals_by_angle(vertices, faces, angle_deg=30.0):
+    """
+    Compute per-corner normals with sharp-edge splitting (CAD-style auto-smooth).
+
+    Newton loads meshes via trimesh, which welds duplicate vertices and averages
+    normals across every edge — sharp CAD edges get smeared, making dense STL
+    robots look "melted"/decimated in the GL viewer. This rebuilds the mesh with
+    one vertex per face corner, where each corner normal averages only adjacent
+    face normals within ``angle_deg`` of its own face.
+
+    Args:
+        vertices: (N, 3) float array of welded vertices.
+        faces: (F, 3) int array of triangle vertex indices.
+        angle_deg: Crease angle; faces meeting at a sharper angle keep distinct normals.
+
+    Returns:
+        tuple: (new_vertices (3F, 3), new_indices (3F,), new_normals (3F, 3)).
+    """
+    faces = faces.reshape(-1, 3)
+    num_faces = faces.shape[0]
+    v0, v1, v2 = (vertices[faces[:, i]] for i in range(3))
+    face_normals = np.cross(v1 - v0, v2 - v0)
+    lengths = np.linalg.norm(face_normals, axis=1, keepdims=True)
+    lengths[lengths < 1e-20] = 1.0
+    face_normals /= lengths
+
+    corner_vertex = faces.reshape(-1)
+    corner_face = np.repeat(np.arange(num_faces), 3)
+
+    # CSR-style adjacency: for every vertex, the list of faces touching it.
+    order = np.argsort(corner_vertex, kind="stable")
+    adjacent_face = corner_face[order]
+    counts = np.bincount(corner_vertex, minlength=len(vertices))
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+
+    # Pair every corner with every face adjacent to its vertex.
+    reps = counts[corner_vertex]
+    cum = np.cumsum(reps)
+    within = np.arange(cum[-1]) - np.repeat(cum - reps, reps)
+    neighbor = adjacent_face[np.repeat(starts[corner_vertex], reps) + within]
+    corner_id = np.repeat(np.arange(3 * num_faces), reps)
+
+    cos_thresh = np.cos(np.deg2rad(angle_deg))
+    same_group = (face_normals[corner_face[corner_id]] * face_normals[neighbor]).sum(axis=1) >= cos_thresh
+
+    grouped_id = corner_id[same_group]
+    grouped_normals = face_normals[neighbor[same_group]]
+    corner_normals = np.stack(
+        [np.bincount(grouped_id, weights=grouped_normals[:, c], minlength=3 * num_faces) for c in range(3)],
+        axis=1,
+    )
+    lengths = np.linalg.norm(corner_normals, axis=1, keepdims=True)
+    lengths[lengths < 1e-20] = 1.0
+    corner_normals /= lengths
+
+    new_vertices = vertices[corner_vertex]
+    new_indices = np.arange(3 * num_faces, dtype=np.int32)
+    return new_vertices.astype(np.float32), new_indices, corner_normals.astype(np.float32)
+
+
+def sharpen_visual_mesh_normals(builder, angle_deg=30.0):
+    """
+    Rebuild all visible mesh shapes in a ``ModelBuilder`` with sharp-edge normals.
+
+    Call after ``add_mjcf``/``add_urdf`` and before ``finalize``. Only visible
+    (visual) mesh shapes are touched; hidden collision meshes are left alone.
+
+    Args:
+        builder: Newton ``ModelBuilder`` holding freshly imported robot shapes.
+        angle_deg: Crease angle passed to :func:`_split_normals_by_angle`.
+    """
+    import newton
+
+    processed = set()
+    for i, source in enumerate(builder.shape_source):
+        if source is None or id(source) in processed:
+            continue
+        if not (builder.shape_flags[i] & int(newton.ShapeFlags.VISIBLE)):
+            continue
+        vertices = getattr(source, "vertices", None)
+        indices = getattr(source, "indices", None)
+        if vertices is None or indices is None or len(indices) == 0:
+            continue
+        processed.add(id(source))
+        new_vertices, new_indices, new_normals = _split_normals_by_angle(
+            np.asarray(vertices, dtype=np.float32), np.asarray(indices, dtype=np.int32), angle_deg
+        )
+        source._vertices = new_vertices
+        source._indices = new_indices
+        source._normals = new_normals
+        if source._uvs is not None:
+            source._uvs = source._uvs[np.asarray(indices, dtype=np.int32).reshape(-1)]
+        source._cached_hash = None
+        source.mesh = None
+
+
 def create_child_parent_map(model):
     """
     Build a mapping between child and parent joints from Newton model.

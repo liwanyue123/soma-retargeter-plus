@@ -1,23 +1,23 @@
 {
-    "_comment": "STARTER scaler config for mydata3 -> engineai_pm01. mydata3 spine: Hips->Spine->Spine1->Neck (no Spine3). joint_scales are 1.0 and must be calibrated via the in-app Calibration panel.",
+    "_comment": "Scaler config for mydata3 -> engineai_pm01. scaling_mode=segmental: joint_scales are per-SEGMENT length ratios (child = parent_effector + segment*scale), calibrated from tools/reference_poses/engineai_pm01_reference_pose.json + sources/mydata3/init_pose.bvh. Recompute via the in-app Calibration panel (it reads scaling_mode automatically).",
     "robot_type": "engineai_pm01",
     "human_root_name": "Hips",
     "human_height_assumption": 1.8,
     "joint_scales": {
-        "Hips": 1.1577,
-        "Spine1": 0.2925,
-        "LeftUpLeg": 1.993,
-        "RightUpLeg": 1.9931,
-        "LeftLeg": 1.3262,
-        "RightLeg": 1.3262,
-        "LeftFoot": 1.2301,
-        "RightFoot": 1.2301,
-        "LeftArm": 0.7311,
-        "RightArm": 0.7311,
-        "LeftForeArm": 0.7614,
-        "RightForeArm": 0.7614,
-        "LeftHand": 1.0317,
-        "RightHand": 1.0348
+        "Hips": 1.1635,
+        "Spine1": 0.294,
+        "LeftArm": 1.2844,
+        "LeftForeArm": 0.8599,
+        "LeftHand": 1.6675,
+        "RightArm": 1.2844,
+        "RightForeArm": 0.8599,
+        "RightHand": 1.6723,
+        "LeftUpLeg": 2.003,
+        "LeftLeg": 1.0767,
+        "LeftFoot": 1.1537,
+        "RightUpLeg": 2.003,
+        "RightLeg": 1.0767,
+        "RightFoot": 1.1537
     },
     "joint_parents": {
         "Hips": "",
@@ -34,5 +34,6 @@
         "RightForeArm": "RightArm",
         "LeftHand": "LeftForeArm",
         "RightHand": "RightForeArm"
-    }
+    },
+    "scaling_mode": "segmental"
 }

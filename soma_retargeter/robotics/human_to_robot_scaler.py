@@ -30,6 +30,18 @@ class HumanToRobotScaler:
         config = io_utils.load_json(config_file)
         self.robot_type = config['robot_type']
         self.skeleton = skeleton
+        # 'geocentric' (default): every effector is root_pos + (joint - root) * scale.
+        #   A single scalar per joint cannot match differing body proportions in
+        #   every pose (e.g. long-armed actor hanging arms -> target above the
+        #   robot's natural hang -> folded elbows).
+        # 'segmental': effector = parent_effector + (joint - parent) * scale, so
+        #   each segment is remapped to the ROBOT's segment length. Targets stay
+        #   reachable (child always within segment length of its parent) and a
+        #   hanging human arm maps to a hanging robot arm. Requires joint_scales
+        #   calibrated as per-segment length ratios (calibration 'segmental' mode).
+        self.scaling_mode = config.get('scaling_mode', 'geocentric')
+        if self.scaling_mode not in ('geocentric', 'segmental'):
+            raise ValueError(f"[ERROR]: Unknown scaling_mode [{self.scaling_mode}]")
 
         ratio = human_height / config['human_height_assumption']
         joint_scales = config['joint_scales']
@@ -64,6 +76,15 @@ class HumanToRobotScaler:
         self.mapped_joint_parents = [
             -1 if joint_parents[name] == "" else self.mapped_joints.index(joint_parents[name])
             for name in self.mapped_joints]
+        # Segmental mode accumulates child = parent + segment, so every mapped
+        # parent must be computed before its children (skeleton.joint_names is
+        # hierarchy-ordered, which guarantees this; assert to be safe).
+        for i, p in enumerate(self.mapped_joint_parents):
+            if p >= i:
+                raise ValueError(
+                    f"[ERROR]: joint_parents not topologically ordered: "
+                    f"[{self.mapped_joints[i]}] before its parent [{self.mapped_joints[p]}]")
+        self.wp_mapped_joint_parents = wp.array(self.mapped_joint_parents, dtype=wp.int32)
 
         # Standing references for per-axis motion-amplitude scaling, injected by
         # the pipeline once the init pose is known. Default to origin / zeros,
@@ -156,6 +177,8 @@ class HumanToRobotScaler:
             in_mapped_joint_indices : wp.array(dtype=wp.int32),
             in_mapped_joint_scales  : wp.array(dtype=wp.float32),
             in_mapped_joint_offsets : wp.array(dtype=wp.transform),
+            in_mapped_joint_parents : wp.array(dtype=wp.int32),
+            in_segmental            : wp.bool,
             in_scale_animation      : wp.bool,
             in_root_amp_scale       : wp.vec3,
             in_ref_root             : wp.vec3,
@@ -165,7 +188,8 @@ class HumanToRobotScaler:
         ):
             HumanToRobotScaler.wp_compute_scaled_effectors(
                 in_num_mapped_joints, in_global_pose, in_mapped_joint_indices,
-                in_mapped_joint_scales, in_mapped_joint_offsets, in_scale_animation,
+                in_mapped_joint_scales, in_mapped_joint_offsets,
+                in_mapped_joint_parents, in_segmental, in_scale_animation,
                 in_root_amp_scale, in_ref_root, in_ref_effectors, in_full_amp_scale, out_result)
 
         wp_global_pose = wp.array([wp.transform_identity()] * skeleton_instance.num_joints, dtype=wp.transform)
@@ -191,6 +215,8 @@ class HumanToRobotScaler:
                 self.mapped_joint_indices,
                 self.mapped_joint_scales,
                 self.mapped_joint_offsets,
+                self.wp_mapped_joint_parents,
+                self.scaling_mode == 'segmental',
                 scale_animation,
                 root_amp,
                 self.ref_root,
@@ -250,6 +276,8 @@ class HumanToRobotScaler:
             in_mapped_joint_indices : wp.array(dtype=wp.int32),
             in_mapped_joint_scales  : wp.array(dtype=wp.float32),
             in_mapped_joint_offsets : wp.array(dtype=wp.transform),
+            in_mapped_joint_parents : wp.array(dtype=wp.int32),
+            in_segmental            : wp.bool,
             in_scale_animation      : wp.bool,
             in_root_amp_scale       : wp.vec3,
             in_ref_root             : wp.vec3,
@@ -260,7 +288,8 @@ class HumanToRobotScaler:
             frame_idx = wp.tid()
             HumanToRobotScaler.wp_compute_scaled_effectors(
                in_num_mapped_joints, in_global_pose[frame_idx], in_mapped_joint_indices,
-               in_mapped_joint_scales, in_mapped_joint_offsets, in_scale_animation,
+               in_mapped_joint_scales, in_mapped_joint_offsets,
+               in_mapped_joint_parents, in_segmental, in_scale_animation,
                in_root_amp_scale, in_ref_root, in_ref_effectors, in_full_amp_scale, out_result[frame_idx])
 
         wp_global_poses = wp.empty(shape=(animation_buffer.num_frames, self.skeleton.num_joints), dtype=wp.transform)
@@ -286,6 +315,8 @@ class HumanToRobotScaler:
                 self.mapped_joint_indices,
                 self.mapped_joint_scales,
                 self.mapped_joint_offsets,
+                self.wp_mapped_joint_parents,
+                self.scaling_mode == 'segmental',
                 scale_animation,
                 root_amp,
                 self.ref_root,
@@ -339,6 +370,8 @@ class HumanToRobotScaler:
         in_mapped_joint_indices : wp.array(dtype=wp.int32),
         in_mapped_joint_scales  : wp.array(dtype=wp.float32),
         in_mapped_joint_offsets : wp.array(dtype=wp.transform),
+        in_mapped_joint_parents : wp.array(dtype=wp.int32),
+        in_segmental            : wp.bool,
         in_scale_animation      : wp.bool,
         in_root_amp_scale       : wp.vec3,
         in_ref_root             : wp.vec3,
@@ -362,15 +395,29 @@ class HumanToRobotScaler:
         mapped_ref = wp.cw_mul(in_ref_root, scale)
         scaled_root_t = mapped_ref + wp.cw_mul(mapped_root - mapped_ref, in_root_amp_scale)
 
+        # Pass 1: base positions (before per-joint offsets / full-body amplitude).
+        # out_result doubles as scratch so segmental children can read their
+        # parent's already-mapped position.
         for i in range(in_num_mapped_joints):
             idx = in_mapped_joint_indices[i]
             pose_tx = in_global_pose[idx]
-            offset_tx = in_mapped_joint_offsets[i]
-
             scale = wp.where(in_scale_animation, wp.vec3(in_mapped_joint_scales[i]), wp.vec3(1.0, 1.0, in_mapped_joint_scales[i]))
-            geocentric_scaled_t = wp.cw_mul((pose_tx.p - root_t), scale)
 
-            q = wp.mul(pose_tx.q, offset_tx.q)
-            base_t = geocentric_scaled_t + scaled_root_t + wp.quat_rotate(q, offset_tx.p)
+            parent = in_mapped_joint_parents[i]
+            if in_segmental and parent >= 0:
+                # Segment-relative: child sits at parent's mapped position plus
+                # the human segment vector rescaled to robot segment length.
+                parent_pose_t = in_global_pose[in_mapped_joint_indices[parent]].p
+                base_t = out_result[parent].p + wp.cw_mul(pose_tx.p - parent_pose_t, scale)
+            else:
+                base_t = wp.cw_mul(pose_tx.p - root_t, scale) + scaled_root_t
+            out_result[i] = wp.transform(base_t, pose_tx.q)
+
+        # Pass 2: apply calibration offsets and full-body amplitude scaling.
+        for i in range(in_num_mapped_joints):
+            offset_tx = in_mapped_joint_offsets[i]
+            base_tx = out_result[i]
+            q = wp.mul(base_tx.q, offset_tx.q)
+            base_t = base_tx.p + wp.quat_rotate(q, offset_tx.p)
             t = in_ref_effectors[i] + wp.cw_mul(base_t - in_ref_effectors[i], in_full_amp_scale)
             out_result[i] = wp.transform(t, q)

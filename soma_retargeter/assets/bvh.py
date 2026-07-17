@@ -522,7 +522,28 @@ class BVHImporter(object):
             cls.load_frame_animation_data(skeleton, child, frame, positions_array, rotations_array, joint_indices, rotate_orders)
 
 
-def load_bvh(bvh_file: str, input_skeleton=None, position_scale: float = 1.0, recenter_xy: bool = False):
+def lower_body_joint_mask(joint_names):
+    """
+    Boolean mask of lower-body joints (root/hips + leg chains) by joint name.
+
+    The root is grouped with the legs on purpose: leg length determines hip
+    height and stride, so the root trajectory must follow the lower-body scale
+    to keep the feet grounded when upper/lower scales differ.
+
+    Args:
+        joint_names: Iterable of joint name strings.
+
+    Returns:
+        np.ndarray: Bool array, True where the joint belongs to the lower body.
+    """
+    # Covers both standard Mixamo-style names (Hips/LeftUpLeg/LeftLeg/LeftFoot/
+    # LeftToeBase) and SOMA names (Root/Hips/LeftLeg/LeftShin/LeftFoot/LeftToeEnd).
+    keys = ('root', 'hips', 'upleg', 'leg', 'shin', 'foot', 'toe')
+    return np.array([any(k in name.lower() for k in keys) for name in joint_names], dtype=bool)
+
+
+def load_bvh(bvh_file: str, input_skeleton=None, position_scale: float = 1.0, recenter_xy: bool = False,
+             position_scale_upper: float = 1.0, position_scale_lower: float = 1.0):
     """
     Load a BVH animation file and create ``Skeleton`` and ``AnimationBuffer`` objects.
 
@@ -537,6 +558,11 @@ def load_bvh(bvh_file: str, input_skeleton=None, position_scale: float = 1.0, re
         recenter_xy (bool): If True, shift the whole clip horizontally so the root's
             frame-0 X/Y sit at the origin (height is preserved). Useful for native
             mocap that carries a world-space offset. Defaults to False.
+        position_scale_upper (float): Extra multiplier (on top of ``position_scale``)
+            for upper-body joints (spine/neck/head/shoulder/arm/hand chains). Use
+            when the actor's arm proportions differ from the robot's. Defaults to 1.0.
+        position_scale_lower (float): Extra multiplier for lower-body joints
+            (root/hips + leg chains, see :func:`lower_body_joint_mask`). Defaults to 1.0.
 
     Returns:
         tuple (Skeleton, AnimationBuffer):
@@ -555,6 +581,15 @@ def load_bvh(bvh_file: str, input_skeleton=None, position_scale: float = 1.0, re
         # Scale every joint's translation component (layout is (..., 7): px,py,pz,qx,qy,qz,qw).
         skeleton._reference_local_transforms[..., 0:3] *= position_scale
         animation.local_transforms[..., 0:3] *= position_scale
+
+    if position_scale_upper != 1.0 or position_scale_lower != 1.0:
+        # Per-group multiplier on the joints' local translations (bone offsets):
+        # broadcasting (joints, 1) covers both the (joints, 7) reference and the
+        # (frames, joints, 7) animation layouts.
+        lower_mask = lower_body_joint_mask(skeleton.joint_names)
+        group_scale = np.where(lower_mask, position_scale_lower, position_scale_upper).astype(np.float32)
+        skeleton._reference_local_transforms[..., 0:3] *= group_scale[:, None]
+        animation.local_transforms[..., 0:3] *= group_scale[:, None]
 
     if input_skeleton is not None:
         # conform to input skeleton

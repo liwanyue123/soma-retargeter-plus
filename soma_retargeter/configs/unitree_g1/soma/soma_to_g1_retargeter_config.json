@@ -104,5 +104,7 @@
             "r_weight": 2.0
         }
     },
-    "retarget_source_position_scale": 0.76
+    "retarget_source_position_scale": 1.0,
+    "retarget_source_position_scale_upper": 1.0,
+    "retarget_source_position_scale_lower": 1.0
 }

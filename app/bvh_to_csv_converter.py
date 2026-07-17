@@ -50,6 +50,15 @@ class Viewer:
         self.source_position_scale = float(self.config.get(
             'retarget_source_position_scale',
             pipeline_utils.get_source_position_scale(self.source_type)))
+        # Optional per-group multipliers on top of the uniform scale. Useful when
+        # the actor's proportions don't match the robot (e.g. longer arms but
+        # shorter legs): tune upper/lower independently instead of compromising
+        # on a single uniform value. Defaults are 1.0 (no effect); calibration
+        # scales/offsets stay unaffected until recomputed.
+        self.source_position_scale_upper = float(self.config.get(
+            'retarget_source_position_scale_upper', 1.0))
+        self.source_position_scale_lower = float(self.config.get(
+            'retarget_source_position_scale_lower', 1.0))
         self.source_recenter_xy = bool(self.config.get(
             'retarget_source_recenter_xy',
             pipeline_utils.get_source_recenter_xy(self.source_type)))
@@ -210,7 +219,9 @@ class Viewer:
         init_pos_scale = retargeter_cfg.get('init_pose_position_scale', self.source_position_scale)
         init_recenter  = retargeter_cfg.get('init_pose_recenter_xy',    self.source_recenter_xy)
         ref_skel, ref_anim = bvh_utils.load_bvh(
-            init_bvh, position_scale=init_pos_scale, recenter_xy=init_recenter)
+            init_bvh, position_scale=init_pos_scale, recenter_xy=init_recenter,
+            position_scale_upper=self.source_position_scale_upper,
+            position_scale_lower=self.source_position_scale_lower)
         self.zero_pose_reference_skeleton = ref_skel
         self.zero_pose_reference_local_zero = ref_anim.get_local_transforms(0).copy()
         # Optional converter override: if the init-pose BVH has a different
@@ -272,6 +283,12 @@ class Viewer:
         if (persisted_scale is not None
                 and abs(float(persisted_scale) - self.source_position_scale) > 1e-9):
             self._apply_source_scale(float(persisted_scale))
+        for group in ('upper', 'lower'):
+            persisted_group = retargeter_cfg.get(f'retarget_source_position_scale_{group}')
+            current = getattr(self, f'source_position_scale_{group}')
+            if (persisted_group is not None
+                    and abs(float(persisted_group) - current) > 1e-9):
+                self._apply_source_scale_group(group, float(persisted_group))
         # At startup the in-memory scale matches the config on disk (nothing to save).
         self._source_scale_dirty = False
 
@@ -318,6 +335,61 @@ class Viewer:
             f"Source position scale = {new_scale:.3f}. "
             "Motion + zero pose rescaled; recompute scales/offsets.")
 
+    def _apply_source_scale_group(self, group, new_scale):
+        """Rescale only the upper- or lower-body joints of the loaded source data.
+
+        Mirrors :meth:`_apply_source_scale` but multiplies the local translations
+        of a single joint group (see ``bvh_utils.lower_body_joint_mask``): the
+        root/hips + leg chains form the lower group, everything else the upper
+        group. Lets arm reach and leg length be tuned independently when the
+        actor's proportions don't match the robot's.
+
+        Args:
+            group: Either ``'upper'`` or ``'lower'``.
+            new_scale: New multiplier for that group (relative to the uniform scale).
+        """
+        assert group in ('upper', 'lower')
+        new_scale = float(new_scale)
+        attr = f'source_position_scale_{group}'
+        old = float(getattr(self, attr, 1.0))
+        if old <= 1e-9 or abs(new_scale - old) < 1e-9:
+            setattr(self, attr, new_scale)
+            return
+        ratio = new_scale / old
+
+        def rescale(skeleton_like, transforms):
+            lower_mask = bvh_utils.lower_body_joint_mask(skeleton_like.joint_names)
+            mask = lower_mask if group == 'lower' else ~lower_mask
+            transforms[..., mask, 0:3] *= ratio
+
+        # Live motion skeleton + animation buffers.
+        if getattr(self, "skeleton", None) is not None:
+            rescale(self.skeleton, self.skeleton._reference_local_transforms)
+            for buf in (getattr(self, "animation_buffers", None) or []):
+                if buf is not None:
+                    rescale(self.skeleton, buf.local_transforms)
+
+        # Zero-pose reference (calibration overlay + numeric reference).
+        if getattr(self, "zero_pose_reference_skeleton", None) is not None:
+            rescale(self.zero_pose_reference_skeleton,
+                    self.zero_pose_reference_skeleton._reference_local_transforms)
+            if getattr(self, "zero_pose_reference_local_zero", None) is not None:
+                rescale(self.zero_pose_reference_skeleton, self.zero_pose_reference_local_zero)
+                if getattr(self, "zero_pose_reference_instance", None) is not None:
+                    self.zero_pose_reference_instance.set_local_transforms(
+                        self.zero_pose_reference_local_zero)
+
+        setattr(self, attr, new_scale)
+        # Live scale differs from what's persisted in the config until saved.
+        self._source_scale_dirty = True
+        # Size-dependent calibration results are now stale.
+        self._calibration_last_scales = None
+        self._calibration_last_offsets = None
+        self._invalidate_effector_scaler()
+        self._calibration_status = (
+            f"Source {group}-body scale = {new_scale:.3f}. "
+            "Motion + zero pose rescaled; recompute scales/offsets.")
+
     def _do_write_source_scale(self):
         """Persist the current source position scale into the retargeter config."""
         path = getattr(self, "_calibration_retargeter_cfg_path", None)
@@ -326,13 +398,16 @@ class Viewer:
             return
         cfg = io_utils.load_json(path)
         cfg['retarget_source_position_scale'] = round(float(self.source_position_scale), 6)
+        cfg['retarget_source_position_scale_upper'] = round(float(self.source_position_scale_upper), 6)
+        cfg['retarget_source_position_scale_lower'] = round(float(self.source_position_scale_lower), 6)
         with open(path, 'w') as f:
             json.dump(cfg, f, indent=4)
         self._calibration_retargeter_cfg = cfg
         self._source_scale_dirty = False
         self._calibration_status = (
-            f"Saved retarget_source_position_scale = "
-            f"{self.source_position_scale:.3f} to {os.path.basename(str(path))}")
+            f"Saved source position scale (uniform={self.source_position_scale:.3f}, "
+            f"upper={self.source_position_scale_upper:.3f}, "
+            f"lower={self.source_position_scale_lower:.3f}) to {os.path.basename(str(path))}")
         print(f"[INFO]: {self._calibration_status}")
 
     def _build_reference_pose(self):
@@ -612,7 +687,9 @@ class Viewer:
         self._invalidate_effector_scaler()
 
         self.skeleton, animation = bvh_utils.load_bvh(
-            path, position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy)
+            path, position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy,
+            position_scale_upper=self.source_position_scale_upper,
+            position_scale_lower=self.source_position_scale_lower)
         self.skeleton_renderer = SkeletonRenderer(self.skeleton, [0])
         self.skeleton_instances = [SkeletonInstance(self.skeleton, _DEFAULT_COLOR, self.converter.transform(wp.transform_identity()))]
 
@@ -773,7 +850,9 @@ class Viewer:
             # the same size as the (already-scaled) motion buffers we feed it.
             pipeline = newton_pipeline.NewtonPipeline(
                 self.skeleton, retarget_source, retarget_target,
-                source_position_scale=self.source_position_scale)
+                source_position_scale=self.source_position_scale,
+                source_position_scale_upper=self.source_position_scale_upper,
+                source_position_scale_lower=self.source_position_scale_lower)
         else:
             raise(ValueError(f"[ERROR]: Unknown retargeter solver [{retarget_solver}"))
         
@@ -1007,9 +1086,20 @@ class Viewer:
         ui.same_line()
         if ui.button("Save scale to config"):
             self._do_write_source_scale()
+        ui.set_next_item_width(200)
+        up_changed, up_val = ui.slider_float(
+            "upper body##srcscaleup", float(self.source_position_scale_upper), 0.1, 5.0, "%.3f")
+        if up_changed:
+            self._apply_source_scale_group('upper', up_val)
+        ui.set_next_item_width(200)
+        lo_changed, lo_val = ui.slider_float(
+            "lower body##srcscalelo", float(self.source_position_scale_lower), 0.1, 5.0, "%.3f")
+        if lo_changed:
+            self._apply_source_scale_group('lower', lo_val)
         ui.text_colored(
             ui.ImVec4(0.7, 0.7, 0.7, 1.0),
-            "Rescales motion + zero pose together; used for bias + retarget.")
+            "Rescales motion + zero pose together; used for bias + retarget.\n"
+            "Upper/lower multiply on top of the uniform scale (arms vs legs).")
 
         if not self.calibration_mode:
             ui.text_wrapped(
@@ -1429,12 +1519,15 @@ class Viewer:
         """Compute joint_scales from the current matching reference poses."""
         ik_map = self._calibration_retargeter_cfg.get('ik_map', {})
         ref_globals, link_globals = self._calibration_collect()
+        scaler_cfg = io_utils.load_json(self._calibration_scaler_cfg_path)
         new_scales = calibration_utils.compute_scales(
             ref_globals,
             self.zero_pose_reference_skeleton.joint_names,
             link_globals,
             ik_map,
-            height_ratio=self._calibration_height_ratio())
+            height_ratio=self._calibration_height_ratio(),
+            mode=scaler_cfg.get('scaling_mode', 'geocentric'),
+            joint_parents=scaler_cfg.get('joint_parents'))
         self._calibration_last_scales = new_scales
         self._calibration_status = (
             f"Computed {len(new_scales)} joint_scales. "
@@ -1459,7 +1552,9 @@ class Viewer:
             ik_map,
             compute_position=compute_pos,
             joint_scales=scales,
-            height_ratio=self._calibration_height_ratio())
+            height_ratio=self._calibration_height_ratio(),
+            mode=scaler.get('scaling_mode', 'geocentric'),
+            joint_parents=scaler.get('joint_parents'))
 
         self._calibration_last_offsets = new_offsets
         self._calibration_status = (
@@ -1615,7 +1710,9 @@ class Viewer:
         
         # All skeletons should be the same, load one as our reference
         bvh_skeleton, _ = bvh_utils.load_bvh(
-            batches[0][0], position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy)
+            batches[0][0], position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy,
+            position_scale_upper=self.source_position_scale_upper,
+            position_scale_lower=self.source_position_scale_lower)
 
         bvh_tx_converter = self.converter.transform(wp.transform_identity())
         expected_num_joints = bvh_skeleton.num_joints
@@ -1627,7 +1724,11 @@ class Viewer:
         retarget_pipeline = None
         if (retarget_solver == 'Newton'):
             import soma_retargeter.pipelines.newton_pipeline as newton_pipeline
-            retarget_pipeline = newton_pipeline.NewtonPipeline(bvh_skeleton, retarget_source, retarget_target)
+            retarget_pipeline = newton_pipeline.NewtonPipeline(
+                bvh_skeleton, retarget_source, retarget_target,
+                source_position_scale=self.source_position_scale,
+                source_position_scale_upper=self.source_position_scale_upper,
+                source_position_scale_lower=self.source_position_scale_lower)
         if retarget_pipeline is None:
             print(f"[ERROR]: Invalid retarget solver selected [{retarget_solver}]. Use 'Newton'.")
             exit(-1)
@@ -1645,7 +1746,9 @@ class Viewer:
             for file_path in batch:
                 _, animation = bvh_utils.load_bvh(
                     file_path, bvh_skeleton,
-                    position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy)
+                    position_scale=self.source_position_scale, recenter_xy=self.source_recenter_xy,
+                    position_scale_upper=self.source_position_scale_upper,
+                    position_scale_lower=self.source_position_scale_lower)
                 # All animations should be on the same skeleton
                 assert expected_num_joints == animation.skeleton.num_joints, (
                     f"[ERROR]: Unexpected number of joints in input motion. Expected {expected_num_joints}, "

@@ -67,6 +67,8 @@ def compute_scales(
     robot_link_globals_by_name: Dict[str, "Tuple[wp.vec3, wp.quat]"],
     ik_map: dict,
     height_ratio: float,
+    mode: str = 'geocentric',
+    joint_parents: Dict[str, str] | None = None,
 ) -> Dict[str, float]:
     """Compute per-joint ``joint_scales`` from matching reference poses.
 
@@ -96,9 +98,21 @@ def compute_scales(
     Returns:
         ``{soma_joint: config_scale_float}``. Joints whose source vector is
         too short to scale (e.g. duplicates of the root) are skipped.
+
+    Segmental mode (``mode='segmental'``, requires ``joint_parents``): non-root
+    scales are per-SEGMENT length ratios instead of root-geocentric ratios::
+
+        s_link = |robot_link.p - robot_parent_link.p| / |soma_link.p - soma_parent.p|
+
+    matching ``HumanToRobotScaler``'s segmental effector accumulation
+    (child = parent_effector + segment * scale).
     """
     if height_ratio <= 0:
         raise ValueError(f"height_ratio must be > 0 (got {height_ratio})")
+    if mode not in ('geocentric', 'segmental'):
+        raise ValueError(f"Unknown calibration mode [{mode}]")
+    if mode == 'segmental' and not joint_parents:
+        raise ValueError("segmental mode requires joint_parents")
 
     name_to_index = {n: i for i, n in enumerate(soma_joint_names)}
     root_joint = _hip_soma_joint_name(ik_map)
@@ -127,9 +141,22 @@ def compute_scales(
         if soma_joint not in name_to_index or link_name not in robot_link_globals_by_name:
             continue
 
-        soma_v = np.asarray(soma_globals[name_to_index[soma_joint]][0:3], dtype=np.float64) - soma_root_p
+        if mode == 'segmental':
+            parent_joint = joint_parents.get(soma_joint, "")
+            parent_link = ik_map.get(parent_joint, {}).get("t_body")
+            if (not parent_joint or parent_joint not in name_to_index
+                    or parent_link not in robot_link_globals_by_name):
+                continue
+            ref_soma_p = np.asarray(soma_globals[name_to_index[parent_joint]][0:3], dtype=np.float64)
+            rp_parent, _ = robot_link_globals_by_name[parent_link]
+            ref_robot_p = np.array([rp_parent[0], rp_parent[1], rp_parent[2]], dtype=np.float64)
+        else:
+            ref_soma_p = soma_root_p
+            ref_robot_p = robot_root_p
+
+        soma_v = np.asarray(soma_globals[name_to_index[soma_joint]][0:3], dtype=np.float64) - ref_soma_p
         rp_link, _ = robot_link_globals_by_name[link_name]
-        robot_v = np.array([rp_link[0], rp_link[1], rp_link[2]], dtype=np.float64) - robot_root_p
+        robot_v = np.array([rp_link[0], rp_link[1], rp_link[2]], dtype=np.float64) - ref_robot_p
 
         s_norm = float(np.linalg.norm(soma_v))
         if s_norm < 1e-4:
@@ -148,6 +175,8 @@ def compute_offsets(
     compute_position: bool = False,
     joint_scales: Dict[str, float] = None,
     height_ratio: float = 1.0,
+    mode: str = 'geocentric',
+    joint_parents: Dict[str, str] | None = None,
 ) -> Dict[str, list]:
     """Compute per-joint ``joint_offsets`` for the scaler config.
 
@@ -174,6 +203,11 @@ def compute_offsets(
     Returns:
         ``{soma_joint: [[px, py, pz], [qx, qy, qz, qw]]}``.
     """
+    if mode not in ('geocentric', 'segmental'):
+        raise ValueError(f"Unknown calibration mode [{mode}]")
+    if mode == 'segmental' and not joint_parents:
+        raise ValueError("segmental mode requires joint_parents")
+
     name_to_index = {n: i for i, n in enumerate(soma_joint_names)}
     root_joint = _hip_soma_joint_name(ik_map)
     soma_root_p = wp.vec3(*soma_globals[name_to_index[root_joint]][0:3])
@@ -182,6 +216,11 @@ def compute_offsets(
     if compute_position and joint_scales:
         eff_scale = {k: float(v) * float(height_ratio) for k, v in joint_scales.items()}
     s_root = eff_scale.get(root_joint, 1.0)
+
+    # Segmental mode: mapped base positions accumulate along the joint_parents
+    # chain (child = parent_base + segment * scale), mirroring the runtime
+    # kernel's pass-1 accumulation (offsets themselves are not chained).
+    mapped_base: Dict[str, np.ndarray] = {}
 
     new_offsets: Dict[str, list] = {}
 
@@ -203,18 +242,28 @@ def compute_offsets(
 
         if compute_position:
             s_link = eff_scale.get(soma_joint, 1.0)
-            scaled_root = wp.vec3(
-                soma_root_p[0] * s_root,
-                soma_root_p[1] * s_root,
-                soma_root_p[2] * s_root)
-            scaled_geocentric = wp.vec3(
-                (soma_p[0] - soma_root_p[0]) * s_link,
-                (soma_p[1] - soma_root_p[1]) * s_link,
-                (soma_p[2] - soma_root_p[2]) * s_link)
+            np_soma_p = np.array([soma_p[0], soma_p[1], soma_p[2]], dtype=np.float64)
+            np_root_p = np.array([soma_root_p[0], soma_root_p[1], soma_root_p[2]], dtype=np.float64)
+
+            parent_joint = joint_parents.get(soma_joint, "") if mode == 'segmental' else ""
+            if soma_joint == root_joint or (mode == 'segmental' and not parent_joint):
+                base = np_root_p * s_root
+            elif mode == 'segmental':
+                if parent_joint not in mapped_base or parent_joint not in name_to_index:
+                    print(f"[WARN]: segmental offsets: parent [{parent_joint}] of "
+                          f"[{soma_joint}] not mapped yet. Skipped.")
+                    continue
+                np_parent_p = np.asarray(
+                    soma_globals[name_to_index[parent_joint]][0:3], dtype=np.float64)
+                base = mapped_base[parent_joint] + (np_soma_p - np_parent_p) * s_link
+            else:
+                base = np_root_p * s_root + (np_soma_p - np_root_p) * s_link
+            mapped_base[soma_joint] = base
+
             residual = wp.vec3(
-                robot_p[0] - scaled_root[0] - scaled_geocentric[0],
-                robot_p[1] - scaled_root[1] - scaled_geocentric[1],
-                robot_p[2] - scaled_root[2] - scaled_geocentric[2])
+                robot_p[0] - base[0],
+                robot_p[1] - base[1],
+                robot_p[2] - base[2])
             off_p = wp.quat_rotate(_quat_inverse(robot_q), residual)
             off_p_list = [_round(off_p[0]), _round(off_p[1]), _round(off_p[2])]
         else:
