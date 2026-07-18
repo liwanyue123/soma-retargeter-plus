@@ -113,6 +113,7 @@ _RETARGETER_CONFIG_FILENAME = {
     # Second native skeleton variant with its own calibration configs.
     (SourceType.MYDATA2, "unitree_g1"):          "mydata2/mydata2_to_g1_retargeter_config.json",
     (SourceType.MYDATA2, "engineai_pm01"):       "mydata2/mydata2_to_pm01_retargeter_config.json",
+    (SourceType.MYDATA2, "engineai_t800"):       "mydata2/mydata2_to_t800_retargeter_config.json",
     (SourceType.MYDATA2, "hightorque_pi_plus"):  "mydata2/mydata2_to_pi_plus_retargeter_config.json",
     (SourceType.MYDATA2, "hightorque_pi_plus_s"): "mydata2/mydata2_to_pi_plus_s_retargeter_config.json",
     (SourceType.MYDATA2, "pndbotics_adam_lite"): "mydata2/mydata2_to_adam_lite_retargeter_config.json",
@@ -180,7 +181,7 @@ def get_robot_mjcf_path(robot_type: str) -> Path:
     return fallback
 
 
-def add_robot_model(builder, robot_type: str) -> None:
+def add_robot_model(builder, robot_type: str, hq_visuals: bool | None = None) -> None:
     """Add a robot's model to a Newton ``ModelBuilder``, dispatching on file type.
 
     Most robots ship as MJCF (``add_mjcf``). URDF robots are also supported
@@ -192,6 +193,9 @@ def add_robot_model(builder, robot_type: str) -> None:
     Args:
         builder: Newton ``ModelBuilder`` to add the robot to.
         robot_type: Robot type string (e.g. ``"pndbotics_adam_sp"``).
+        hq_visuals: If True, rebuild visual meshes with crease-aware normals.
+            If ``None`` (default), follows the ``SOMA_HQ_VISUALS`` env var.
+            Cosmetics only; ~1.5 s extra on dense STL robots.
     """
     path = str(get_robot_mjcf_path(robot_type))
     if path.lower().endswith(".urdf"):
@@ -203,10 +207,13 @@ def add_robot_model(builder, robot_type: str) -> None:
 
     # Newton's trimesh import welds vertices and smooths normals across sharp
     # CAD edges, which makes STL robots look low-poly in the GL viewer.
-    # SOMA_HQ_VISUALS=1 rebuilds visual meshes with crease-aware normals for
-    # presentation renders; the default skips it to keep loading fast (~1.5s
-    # saved on a dense robot) since it is purely cosmetic.
-    if os.environ.get("SOMA_HQ_VISUALS", "0") == "1":
+    # HQ rebuilds visual meshes with crease-aware normals for presentation
+    # renders; the default skips it to keep loading fast since it is purely
+    # cosmetic. Normals are baked at import time — Newton's GL viewer only
+    # allows set_model() once, so mid-session toggles require an app restart.
+    if hq_visuals is None:
+        hq_visuals = os.environ.get("SOMA_HQ_VISUALS", "0") == "1"
+    if hq_visuals:
         newton_utils.sharpen_visual_mesh_normals(builder)
 
 

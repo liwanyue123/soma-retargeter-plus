@@ -120,24 +120,19 @@ class Viewer:
         self.viewer.renderer.set_title("BVH to CSV Converter")
         self.viewer.register_ui_callback(lambda ui: self.gui(ui), position="free")
 
-        self.robot_builder = newton.ModelBuilder()
-        pipeline_utils.add_robot_model(self.robot_builder, self.robot_type)
+        # HQ visuals: crease-aware mesh normals (cosmetic). Baked at import time;
+        # Newton's GL viewer only allows set_model() once, so toggling mid-session
+        # cannot rebuild — preference is saved and applied on the next launch.
+        self.hq_visuals = self._load_hq_visuals_pref()
+        self.hq_visuals_active = self.hq_visuals
+        # Mapping mode: default geocentric (original). Segmental can be enabled
+        # independently for upper / lower body; applied on next Retarget.
+        self.segmental_upper = False
+        self.segmental_lower = False
 
         self.num_robots = 1
         self.robot_offsets = [wp.transform(wp.vec3(0.0, i - (self.num_robots - 1) / 2.0, 0.0), wp.quat_identity()) for i in range(self.num_robots)]
-        builder = newton.ModelBuilder()
-        builder.add_ground_plane()
-        for _ in range(self.num_robots):
-            builder.add_builder(self.robot_builder, wp.transform_identity())
-        self.model = builder.finalize()
-
-        self.viewer.set_model(self.model)
-        self.viewer.set_world_offsets([0, 0, 0])
-        self.state = self.model.state()
-
-        self.robot_num_joint_q = self.model.joint_coord_count // self.model.articulation_count
-        self.robot_joint_q_offsets = [int(i * self.robot_num_joint_q) for i in range(self.model.articulation_count)]
-        self.robot_default_joint_q_values = self.model.joint_q.numpy()
+        self._build_viewer_robot_model()
 
         self.coordinate_renderer = CoordinateRenderer()
         self.show_ik_map_axes = False
@@ -183,6 +178,50 @@ class Viewer:
         self._scene_objects_status = ""
         self._scene_object_logged_ids = set()
         self._scene_unit_box_mesh_path = None
+
+    def _hq_visuals_pref_path(self):
+        return io_utils.get_project_root() / ".soma_hq_visuals"
+
+    def _load_hq_visuals_pref(self):
+        """Resolve HQ visuals preference: env ``SOMA_HQ_VISUALS`` overrides file."""
+        env = os.environ.get("SOMA_HQ_VISUALS")
+        if env is not None:
+            return env == "1"
+        path = self._hq_visuals_pref_path()
+        if path.is_file():
+            return path.read_text().strip() == "1"
+        return False
+
+    def _save_hq_visuals_pref(self, enabled):
+        path = self._hq_visuals_pref_path()
+        path.write_text("1\n" if enabled else "0\n")
+        os.environ["SOMA_HQ_VISUALS"] = "1" if enabled else "0"
+
+    def _build_viewer_robot_model(self):
+        """Build the on-screen robot model once (Newton viewer set_model is one-shot).
+
+        HQ mesh normals are applied here from ``self.hq_visuals``. Mid-session
+        toggles only update the saved preference — restart the app to rebuild.
+        """
+        self.robot_builder = newton.ModelBuilder()
+        pipeline_utils.add_robot_model(
+            self.robot_builder, self.robot_type, hq_visuals=self.hq_visuals)
+
+        builder = newton.ModelBuilder()
+        builder.add_ground_plane()
+        for _ in range(self.num_robots):
+            builder.add_builder(self.robot_builder, wp.transform_identity())
+        self.model = builder.finalize()
+
+        self.viewer.set_model(self.model)
+        self.viewer.set_world_offsets([0, 0, 0])
+        self.state = self.model.state()
+
+        self.robot_num_joint_q = self.model.joint_coord_count // self.model.articulation_count
+        self.robot_joint_q_offsets = [
+            int(i * self.robot_num_joint_q) for i in range(self.model.articulation_count)]
+        self.robot_default_joint_q_values = self.model.joint_q.numpy()
+        self.hq_visuals_active = self.hq_visuals
 
     def _init_calibration(self):
         """Set up state for the in-app bias-calibration panel.
@@ -276,6 +315,8 @@ class Viewer:
         self._calibration_status = ""
         self._calibration_last_offsets = None
         self._calibration_last_scales = None
+        self._calibration_last_offsets_segmental = None
+        self._calibration_last_scales_segmental = None
 
         # A previously-saved slider value (persisted in the retargeter config)
         # takes effect here: rescale the already-loaded motion + zero pose so the
@@ -331,6 +372,8 @@ class Viewer:
         # Size-dependent calibration results are now stale.
         self._calibration_last_scales = None
         self._calibration_last_offsets = None
+        self._calibration_last_scales_segmental = None
+        self._calibration_last_offsets_segmental = None
         self._invalidate_effector_scaler()
         self._calibration_status = (
             f"Source position scale = {new_scale:.3f}. "
@@ -386,6 +429,8 @@ class Viewer:
         # Size-dependent calibration results are now stale.
         self._calibration_last_scales = None
         self._calibration_last_offsets = None
+        self._calibration_last_scales_segmental = None
+        self._calibration_last_offsets_segmental = None
         self._invalidate_effector_scaler()
         self._calibration_status = (
             f"Source {group}-body scale = {new_scale:.3f}. "
@@ -607,7 +652,9 @@ class Viewer:
                 skeleton,
                 float(cfg['model_height']),
                 self._calibration_scaler_cfg_path,
-                offsets_file=self._calibration_offsets_cfg_path)
+                offsets_file=self._calibration_offsets_cfg_path,
+                segmental_upper=self.segmental_upper,
+                segmental_lower=self.segmental_lower)
         except Exception as exc:  # noqa: BLE001 - surface build errors in the UI
             self._effector_target_status = f"effector-target scaler failed: {exc}"
             print(f"[WARN]: {self._effector_target_status}")
@@ -853,7 +900,9 @@ class Viewer:
                 self.skeleton, retarget_source, retarget_target,
                 source_position_scale=self.source_position_scale,
                 source_position_scale_upper=self.source_position_scale_upper,
-                source_position_scale_lower=self.source_position_scale_lower)
+                source_position_scale_lower=self.source_position_scale_lower,
+                segmental_upper=self.segmental_upper,
+                segmental_lower=self.segmental_lower)
         else:
             raise(ValueError(f"[ERROR]: Unknown retargeter solver [{retarget_solver}"))
         
@@ -876,7 +925,7 @@ class Viewer:
         
         viewport = ui.get_main_viewport()
 
-        panel_size = ui.ImVec2(320, 320)
+        panel_size = ui.ImVec2(320, 420)
         ui.set_next_window_pos(
             ui.ImVec2(
                 viewport.size.x - _UI_NEWTON_PANEL_MARGIN - panel_size.x,
@@ -946,6 +995,17 @@ class Viewer:
             if (len(self.animation_buffers) == 0):
                 ui.end_disabled()
 
+            ui.spacing()
+            ui.text("Mapping Mode:")
+            ui.text_disabled("Default = geocentric. Enable segmental per half-body.")
+            changed_su, self.segmental_upper = ui.checkbox(
+                "Segmental upper body##segup", self.segmental_upper)
+            changed_sl, self.segmental_lower = ui.checkbox(
+                "Segmental lower body##seglow", self.segmental_lower)
+            if changed_su or changed_sl:
+                self._invalidate_effector_scaler()
+
+            ui.spacing()
             ui.align_text_to_frame_padding()
             ui.text("CSV Motion:")
             ui.same_line()
@@ -1013,6 +1073,19 @@ class Viewer:
                 self._invalidate_effector_scaler()
                 if not self.show_effector_targets:
                     self.effector_target_coordinate_renderer.clear(self.viewer)
+            hq_changed, self.hq_visuals = ui.checkbox(
+                "High Quality Visuals##hqvis", self.hq_visuals)
+            if hq_changed:
+                self._save_hq_visuals_pref(self.hq_visuals)
+                if self.hq_visuals != self.hq_visuals_active:
+                    print("[INFO]: HQ visuals preference saved; restart the app to apply "
+                          "(Newton viewer set_model can only be called once).")
+            if self.hq_visuals != self.hq_visuals_active:
+                ui.text_colored(
+                    ui.ImVec4(1.0, 0.75, 0.3, 1.0),
+                    "Restart app to apply HQ visuals change.")
+            else:
+                ui.text_disabled("Mesh normals baked at load (~1.5s when ON).")
             if self.show_effector_targets and self._effector_target_status:
                 ui.text_colored(ui.ImVec4(1.0, 0.6, 0.4, 1.0), self._effector_target_status)
             _, self.show_gizmos = ui.checkbox("Show Gizmos", self.show_gizmos)
@@ -1125,7 +1198,7 @@ class Viewer:
         ui.text_colored(
             ui.ImVec4(0.7, 0.85, 0.7, 1.0),
             "Saves the current source scale, then recomputes & writes "
-            "joint_scales AND joint_offsets (incl. offset.p).")
+            "geocentric + segmental joint_scales/offsets (incl. offset.p).")
 
         have_scales = bool(self._calibration_last_scales)
         have_offsets = self._calibration_last_offsets is not None
@@ -1517,49 +1590,62 @@ class Viewer:
         return ref_globals, link_globals
 
     def _do_compute_scales(self):
-        """Compute joint_scales from the current matching reference poses."""
+        """Compute geocentric AND segmental joint_scales from the current poses."""
         ik_map = self._calibration_retargeter_cfg.get('ik_map', {})
         ref_globals, link_globals = self._calibration_collect()
         scaler_cfg = io_utils.load_json(self._calibration_scaler_cfg_path)
-        new_scales = calibration_utils.compute_scales(
-            ref_globals,
-            self.zero_pose_reference_skeleton.joint_names,
-            link_globals,
-            ik_map,
-            height_ratio=self._calibration_height_ratio(),
-            mode=scaler_cfg.get('scaling_mode', 'geocentric'),
-            joint_parents=scaler_cfg.get('joint_parents'))
-        self._calibration_last_scales = new_scales
+        joint_parents = scaler_cfg.get('joint_parents')
+        height_ratio = self._calibration_height_ratio()
+        common = dict(
+            soma_globals=ref_globals,
+            soma_joint_names=self.zero_pose_reference_skeleton.joint_names,
+            robot_link_globals_by_name=link_globals,
+            ik_map=ik_map,
+            height_ratio=height_ratio,
+            joint_parents=joint_parents,
+        )
+        geo_scales = calibration_utils.compute_scales(**common, mode='geocentric')
+        seg_scales = calibration_utils.compute_scales(**common, mode='segmental')
+        self._calibration_last_scales = geo_scales
+        self._calibration_last_scales_segmental = seg_scales
         self._calibration_status = (
-            f"Computed {len(new_scales)} joint_scales. "
-            "Click 'Write scales to Config' to persist.")
+            f"Computed {len(geo_scales)} geocentric + {len(seg_scales)} segmental "
+            "joint_scales. Click 'Write scales to Config' to persist.")
         print(f"[INFO]: {self._calibration_status}")
 
     def _do_compute_bias(self):
-        """Compute joint_offsets from current source zero pose + robot pose."""
+        """Compute geocentric AND segmental joint_offsets from current poses."""
         ik_map = self._calibration_retargeter_cfg.get('ik_map', {})
         ref_globals, link_globals = self._calibration_collect()
 
-        # Use the latest in-memory scales if the user just computed them,
-        # otherwise fall back to whatever is currently saved in the config.
         scaler = io_utils.load_json(self._calibration_scaler_cfg_path)
-        scales = getattr(self, "_calibration_last_scales", None) or scaler.get('joint_scales', {})
-
+        geo_scales = (getattr(self, "_calibration_last_scales", None)
+                      or scaler.get('joint_scales', {}))
+        seg_scales = (getattr(self, "_calibration_last_scales_segmental", None)
+                      or scaler.get('joint_scales_segmental')
+                      or geo_scales)
+        joint_parents = scaler.get('joint_parents')
+        height_ratio = self._calibration_height_ratio()
         compute_pos = bool(getattr(self, "_calc_position", False))
-        new_offsets = calibration_utils.compute_offsets(
-            ref_globals,
-            self.zero_pose_reference_skeleton.joint_names,
-            link_globals,
-            ik_map,
-            compute_position=compute_pos,
-            joint_scales=scales,
-            height_ratio=self._calibration_height_ratio(),
-            mode=scaler.get('scaling_mode', 'geocentric'),
-            joint_parents=scaler.get('joint_parents'))
 
-        self._calibration_last_offsets = new_offsets
+        common = dict(
+            soma_globals=ref_globals,
+            soma_joint_names=self.zero_pose_reference_skeleton.joint_names,
+            robot_link_globals_by_name=link_globals,
+            ik_map=ik_map,
+            compute_position=compute_pos,
+            height_ratio=height_ratio,
+            joint_parents=joint_parents,
+        )
+        geo_offsets = calibration_utils.compute_offsets(
+            **common, joint_scales=geo_scales, mode='geocentric')
+        seg_offsets = calibration_utils.compute_offsets(
+            **common, joint_scales=seg_scales, mode='segmental')
+
+        self._calibration_last_offsets = geo_offsets
+        self._calibration_last_offsets_segmental = seg_offsets
         self._calibration_status = (
-            f"Computed {len(new_offsets)} offsets. "
+            f"Computed {len(geo_offsets)} geo + {len(seg_offsets)} segmental offsets. "
             f"Position: {'computed (residual)' if compute_pos else 'kept (existing)'}")
         print(f"[INFO]: {self._calibration_status}")
 
@@ -1571,7 +1657,11 @@ class Viewer:
         keep_pos = not bool(getattr(self, "_calc_position", False))
         calibration_utils.merge_offsets_into_config(
             offsets_cfg, self._calibration_last_offsets,
-            keep_existing_position=keep_pos)
+            keep_existing_position=keep_pos, key='joint_offsets')
+        if self._calibration_last_offsets_segmental is not None:
+            calibration_utils.merge_offsets_into_config(
+                offsets_cfg, self._calibration_last_offsets_segmental,
+                keep_existing_position=keep_pos, key='joint_offsets_segmental')
         calibration_utils.write_scaler_config(offsets_cfg, path)
         self._invalidate_effector_scaler()
         self._calibration_status = f"Wrote offsets to {path}"
@@ -1583,10 +1673,17 @@ class Viewer:
         path = self._calibration_scaler_cfg_path
         scaler_cfg = io_utils.load_json(path)
         calibration_utils.merge_scales_into_config(
-            scaler_cfg, self._calibration_last_scales)
+            scaler_cfg, self._calibration_last_scales, key='joint_scales')
+        if getattr(self, "_calibration_last_scales_segmental", None):
+            calibration_utils.merge_scales_into_config(
+                scaler_cfg, self._calibration_last_scales_segmental,
+                key='joint_scales_segmental')
+        # Drop the legacy single-mode flag; both sets are now available and the
+        # UI / constructor args select per body group at runtime.
+        scaler_cfg.pop('scaling_mode', None)
         calibration_utils.write_scaler_config(scaler_cfg, path)
         self._invalidate_effector_scaler()
-        self._calibration_status = f"Wrote joint_scales to {path}"
+        self._calibration_status = f"Wrote joint_scales (+segmental) to {path}"
         print(f"[INFO]: {self._calibration_status}")
 
     def _do_calibrate_all(self):
@@ -1597,7 +1694,8 @@ class Viewer:
         recomputed together from the SAME reference poses, and that the live
         source position scale is saved to the retargeter config. This avoids the
         classic footgun of changing the scale (or recomputing scales) while
-        leaving a stale ``offset.p`` behind.
+        leaving a stale ``offset.p`` behind. Also writes the segmental twin sets
+        so upper/lower mapping toggles can switch without recalibrating.
         """
         steps = []
 
@@ -1606,10 +1704,12 @@ class Viewer:
             self._do_write_source_scale()
             steps.append("saved scale")
 
-        # 2. joint_scales: compute + write.
+        # 2. joint_scales (geo + segmental): compute + write.
         self._do_compute_scales()
         self._do_write_scales()
-        steps.append(f"{len(self._calibration_last_scales or {})} scales")
+        steps.append(
+            f"{len(self._calibration_last_scales or {})} geo / "
+            f"{len(self._calibration_last_scales_segmental or {})} seg scales")
 
         # 3. joint_offsets: force the offset.p residual to be recomputed so it
         #    always matches the freshly written scales, then write.
@@ -1620,7 +1720,9 @@ class Viewer:
             self._do_write_offsets()
         finally:
             self._calc_position = prev_calc_position
-        steps.append(f"{len(self._calibration_last_offsets or {})} offsets (+offset.p)")
+        steps.append(
+            f"{len(self._calibration_last_offsets or {})} geo / "
+            f"{len(self._calibration_last_offsets_segmental or {})} seg offsets (+offset.p)")
 
         # Report the largest recomputed offset.p residual. If this is big (e.g.
         # >5 cm on an arm joint), the robot calibration pose does not match the

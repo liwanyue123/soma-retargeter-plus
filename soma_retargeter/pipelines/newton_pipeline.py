@@ -36,7 +36,8 @@ class NewtonPipeline:
     joint limit clamping and feet stabilization.
     """
     def __init__(self, skeleton: Skeleton, source_type='soma', robot_type='unitree_g1', retarget_config: dict = None, source_position_scale: float = None,
-                 source_position_scale_upper: float = 1.0, source_position_scale_lower: float = 1.0):
+                 source_position_scale_upper: float = 1.0, source_position_scale_lower: float = 1.0,
+                 segmental_upper: bool | None = None, segmental_lower: bool | None = None):
         """
         Initialize the Newton retargeting pipeline.
 
@@ -47,6 +48,9 @@ class NewtonPipeline:
             retarget_config: Optional configuration dictionary. If None, a
                 configuration is loaded from disk based on the source/target
                 types.
+            segmental_upper: If set, force upper-body segmental/geocentric mapping
+                (overrides scaler config). ``None`` leaves the config default.
+            segmental_lower: Same for root/hips + legs.
 
         Raises:
             ValueError: If the target robot type is not supported.
@@ -80,7 +84,9 @@ class NewtonPipeline:
         self.human_robot_scaler = HumanToRobotScaler(
             skeleton, retargeter_config['model_height'],
             io_utils.get_config_file(retargeter_config['human_robot_scaler_config']),
-            offsets_file=offsets_file)
+            offsets_file=offsets_file,
+            segmental_upper=segmental_upper,
+            segmental_lower=segmental_lower)
 
         # Per-axis motion-amplitude scales (x, y, z), applied together:
         #   root_amplitude_scale: scales the root trajectory's displacement from

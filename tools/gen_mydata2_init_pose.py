@@ -7,12 +7,13 @@ no Spine2/Spine3, single Neck). This differs from the mydata (man_pabox) skeleto
 so we cannot reuse mydata's init pose file directly. Instead we construct the same
 clean stance directly on the mydata2 rig:
 
-  * spine / legs / neck / head straight (rest pose, all rotations zero)
+  * spine / neck / head / shoulders leveled (rest pose)
   * upper arms vertical, pointing at the ground   (world -Y)
   * forearms horizontal, pointing forward          (world +Z), 90-deg elbow
   * both palms vertical and facing each other       (palm normals along +/-X)
   * fingers straight, thumbs up
-  * root leveled (no rotation) and grounded (feet at y=0)
+  * LEGS + FEET copied from frame 0 of the reference BVH (so grounding matches
+    the motion clips); root height aligned to that frame's ankle height
 
 The right side is computed from the rig geometry; the left side is mirrored
 (local D = diag(-1, 1, 1)) so the two sides are exactly symmetric.
@@ -20,17 +21,17 @@ The right side is computed from the rig geometry; the left side is mirrored
 Y-up axes for this rig:  up = +Y,  down = -Y,  forward = +Z (toes),  lateral = X.
 
 Output: soma_retargeter/configs/sources/mydata2/init_pose.bvh   (single frame)
-Run:    conda run -n soma-retargeter python tools/gen_mydata2_init_pose.py
+Run:    python tools/gen_mydata2_init_pose.py \
+            [--src dataset/my_data2/Roundhouse_kick_take_001_B.bvh]
 """
+import argparse
 import os
 import numpy as np
 from scipy.spatial.transform import Rotation as Rot
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.join(_HERE, "..")
-# The mydata2 skeleton (hierarchy + bone offsets) is taken from the authoritative
-# raw dataset BVH, NOT from the output file (which we overwrite).
-_SRC = os.path.join(_ROOT, "dataset", "my_data2", "kuazhangaiwu_02_take_001_A.bvh")
+_DEFAULT_SRC = os.path.join(_ROOT, "dataset", "my_data2", "Roundhouse_kick_take_001_B.bvh")
 _OUT = os.path.join(_ROOT, "soma_retargeter", "configs", "sources", "mydata2", "init_pose.bvh")
 
 DOWN = np.array([0.0, -1.0, 0.0])     # upper arm points at the ground
@@ -140,13 +141,18 @@ def frame(e1, e2):
     return np.column_stack([e1, e2, np.cross(e1, e2)])
 
 
-def main():
-    hier, joints, offsets, ends = parse(_SRC)
+def main(src_path=None):
+    src = src_path or _DEFAULT_SRC
+    if not os.path.isfile(src):
+        raise FileNotFoundError(f"Reference BVH not found: {src}")
+    print(f"[INFO]: Building mydata2 zero pose from [{src}]")
+
+    hier, joints, offsets, ends = parse(src)
     names = [j[0] for j in joints]
     parent = {j[0]: j[1] for j in joints}
     chans = {j[0]: j[2] for j in joints}
     D = np.diag([-1.0, 1.0, 1.0])
-    cap_L, cap_root = read_frame0(_SRC, joints, chans)
+    cap_L, cap_root = read_frame0(src, joints, chans)
 
     # Upper body (root/spine/neck/head/shoulders) starts leveled at identity; the
     # LEGS + FEET are taken from the data's own standing frame so the zero pose
@@ -261,4 +267,12 @@ def _verify(joints, offsets, ends):
 
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser(
+        description="Build mydata2 holding-box zero pose from a reference BVH frame 0.")
+    ap.add_argument(
+        "--src",
+        default=_DEFAULT_SRC,
+        help="Reference BVH (hierarchy + standing legs from frame 0). "
+             f"Default: {_DEFAULT_SRC}")
+    args = ap.parse_args()
+    main(args.src)

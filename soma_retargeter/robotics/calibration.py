@@ -281,8 +281,9 @@ def merge_offsets_into_config(
     scaler_cfg: dict,
     new_offsets: Dict[str, list],
     keep_existing_position: bool = True,
+    key: str = "joint_offsets",
 ) -> dict:
-    """Return ``scaler_cfg`` with ``joint_offsets`` updated.
+    """Return ``scaler_cfg`` with an offsets dict updated.
 
     The merge is non-destructive: any existing entry that ``new_offsets`` does
     not cover (e.g. ``LeftToe`` / ``RightToe`` aliased by the scaler) is
@@ -293,11 +294,12 @@ def merge_offsets_into_config(
         new_offsets: New offsets computed by :func:`compute_offsets`.
         keep_existing_position: If True, preserve any existing ``offset.p``
             value for each joint and only overwrite ``offset.q``.
+        key: Config key to write (``joint_offsets`` or ``joint_offsets_segmental``).
 
     Returns:
-        The same dict as ``scaler_cfg``, with ``joint_offsets`` updated.
+        The same dict as ``scaler_cfg``, with the offsets key updated.
     """
-    existing = dict(scaler_cfg.get("joint_offsets", {}))
+    existing = dict(scaler_cfg.get(key, {}))
 
     for joint, vals in new_offsets.items():
         merged_pos = vals[0]
@@ -306,22 +308,28 @@ def merge_offsets_into_config(
             merged_pos = existing[joint][0]
         existing[joint] = [merged_pos, merged_quat]
 
-    scaler_cfg["joint_offsets"] = existing
+    scaler_cfg[key] = existing
     return scaler_cfg
 
 
 def merge_scales_into_config(
     scaler_cfg: dict,
     new_scales: Dict[str, float],
+    key: str = "joint_scales",
 ) -> dict:
-    """Update ``joint_scales`` in-place, preserving any joint not in ``new_scales``.
+    """Update a scales dict in-place, preserving any joint not in ``new_scales``.
 
     Mirrored joints (e.g. ``LeftToe`` / ``LeftToeBase`` which are aliased by
     ``HumanToRobotScaler``) are left as-is unless explicitly listed.
+
+    Args:
+        scaler_cfg: Scaler config dict (mutated and returned).
+        new_scales: New ``{joint: scale}`` values.
+        key: Config key to write (``joint_scales`` or ``joint_scales_segmental``).
     """
-    existing = dict(scaler_cfg.get("joint_scales", {}))
+    existing = dict(scaler_cfg.get(key, {}))
     existing.update({k: float(v) for k, v in new_scales.items()})
-    scaler_cfg["joint_scales"] = existing
+    scaler_cfg[key] = existing
     return scaler_cfg
 
 

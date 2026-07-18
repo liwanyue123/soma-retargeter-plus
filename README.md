@@ -175,18 +175,27 @@ Use the GUI calibration panel when tuning a new robot’s scaler config for the 
 
 ### Scaling modes (proportion mismatch)
 
-The scaler config's optional `"scaling_mode"` selects how source joints map to robot IK targets:
+The scaler maps source joints to robot IK targets in either of two ways, selectable
+**independently for upper and lower body** (UI checkboxes under **Motion** →
+*Segmental upper body* / *Segmental lower body*, or config keys `segmental_upper` /
+`segmental_lower`). Default for both is off = original **geocentric** mapping.
 
-- `"geocentric"` (default) — target = root + (joint − root) × per-joint scalar. Simple, but a single scalar calibrated at the reference pose cannot match differing body proportions in every pose: a long-armed actor's hanging hands can map *above* the robot's natural hang, forcing folded elbows, and targets can land outside the robot's reach entirely (the arm saturates fully extended and stops responding to tuning).
-- `"segmental"` — target = parent target + (joint − parent) × per-**segment** length ratio (chained via the config's `joint_parents`). Every segment is remapped to the robot's own limb length, so targets stay reachable by construction and a hanging human arm maps to a hanging robot arm regardless of proportions.
+- **geocentric** (default) — target = root + (joint − root) × per-joint scalar. Simple, but a single scalar calibrated at the reference pose cannot match differing body proportions in every pose: a long-armed actor's hanging hands can map *above* the robot's natural hang, forcing folded elbows, and targets can land outside the robot's reach entirely (the arm saturates fully extended and stops responding to tuning).
+- **segmental** — target = parent target + (joint − parent) × per-**segment** length ratio (chained via the config's `joint_parents`). Every segment is remapped to the robot's own limb length, so targets stay reachable by construction and a hanging human arm maps to a hanging robot arm regardless of proportions.
 
-Set `"scaling_mode": "segmental"` in the scaler config, then recalibrate (the Calibration panel and `compute_scales`/`compute_offsets` read the mode automatically — `joint_scales` become segment length ratios instead of root-geocentric ratios). Existing configs without the key keep the exact legacy behavior.
+**Practical tip:** turn on **Segmental upper body** when the arms/hands need to track the source more closely (reach, hang, and gesture stay nearer the target motion). Prefer leaving **Segmental lower body** off — segmental legs remapped segment-by-segment tend to drift the foot targets during stance and cause visible foot slip.
+
+One-Click Calibrate writes **both** calibration sets (`joint_scales` /
+`joint_offsets` for geocentric, plus `joint_scales_segmental` /
+`joint_offsets_segmental`) so you can flip the UI toggles without recalibrating.
+Legacy configs with `"scaling_mode": "segmental"` still switch both halves on until
+recalibrated. Existing configs without the new keys keep geocentric behaviour.
 
 For headless runs, the live source-scale sliders map to the config keys `retarget_source_position_scale` (uniform), `retarget_source_position_scale_upper`, and `retarget_source_position_scale_lower` (group multipliers, default 1.0) — settable in the converter config or persisted into the retargeter config by **Save scale to config**.
 
 ### Display quality (demo videos)
 
-Newton's mesh import welds vertices and smooths normals across sharp CAD edges, which makes dense STL robots look low-poly/melted in the GL viewer. For presentation renders, enable crease-aware visual normals:
+Newton's mesh import welds vertices and smooths normals across sharp CAD edges, which makes dense STL robots look low-poly/melted in the GL viewer. For presentation renders, enable crease-aware visual normals via the **High Quality Visuals** checkbox in the Visibility panel (preference is saved; **restart the app** to apply — Newton's GL viewer only allows `set_model()` once), or at launch:
 
 ```bash
 SOMA_HQ_VISUALS=1 python app/bvh_to_csv_converter.py --config ... --viewer gl
@@ -241,8 +250,8 @@ offsets* live in separate files so they can be regenerated independently:
 
 | File (under `configs/<robot>/<source>/`) | Holds |
 |------|-------|
-| `<source>_to_<robot>_scaler_config.json` | `joint_scales` (tracking) + `joint_parents` + optional `scaling_mode` (`geocentric`/`segmental`) |
-| `<source>_to_<robot>_offsets_config.json` | `joint_offsets` (calibration result) |
+| `<source>_to_<robot>_scaler_config.json` | `joint_scales` / optional `joint_scales_segmental` + `joint_parents` + optional `segmental_upper` / `segmental_lower` (or legacy `scaling_mode`) |
+| `<source>_to_<robot>_offsets_config.json` | `joint_offsets` / optional `joint_offsets_segmental` (calibration result) |
 | `<source>_to_<robot>_retargeter_config.json` | `ik_map` (keyed by your joint names) + references the two files above via `human_robot_scaler_config` and `joint_offsets_config` |
 
 The retargeter config also points `initialization_pose` at a SOMA-style symmetric

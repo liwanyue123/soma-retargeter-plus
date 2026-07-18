@@ -5,16 +5,36 @@ import warp as wp
 
 import soma_retargeter.utils.io_utils as io_utils
 import soma_retargeter.utils.pose_utils as pose_utils
+import soma_retargeter.assets.bvh as bvh_utils
 
 from soma_retargeter.animation.skeleton import Skeleton, SkeletonInstance
 from soma_retargeter.animation.animation_buffer import AnimationBuffer
+
+
+def _offsets_to_wp_dict(joint_offset_data):
+    """Convert ``{name: [[t], [q]]}`` to ``{name: wp.transform}``."""
+    out = {}
+    for joint_name, entry in joint_offset_data.items():
+        t_offset, q_offset = entry
+        out[joint_name] = wp.transform(
+            wp.vec3(*t_offset),
+            wp.normalize(wp.quat(*q_offset)))
+    # SOMA convention: ToeBase shares the Toe joint's offset. Native skeletons
+    # may already define ToeBase directly (and have no "Toe"), so only alias
+    # when a "Toe" entry exists and "ToeBase" is not already provided.
+    if "LeftToe" in out:
+        out.setdefault("LeftToeBase", out["LeftToe"])
+    if "RightToe" in out:
+        out.setdefault("RightToeBase", out["RightToe"])
+    return out
 
 
 class HumanToRobotScaler:
     """
     Scale and map human motion to robot-aligned effectors.
     """
-    def __init__(self, skeleton: Skeleton, human_height, config_file, offsets_file=None):
+    def __init__(self, skeleton: Skeleton, human_height, config_file, offsets_file=None,
+                 segmental_upper=None, segmental_lower=None):
         """
         Args:
             skeleton: Common skeleton of the source clips.
@@ -26,51 +46,75 @@ class HumanToRobotScaler:
                 When provided, ``joint_offsets`` are read from here instead of from
                 ``config_file`` (keeps tracking scales and calibration offsets in
                 separate files per data source).
+            segmental_upper: If True, upper-body joints use segmental mapping.
+                ``None`` (default) reads the ``segmental_upper`` config key.
+            segmental_lower: Same for root/hips + leg joints.
         """
         config = io_utils.load_json(config_file)
         self.robot_type = config['robot_type']
         self.skeleton = skeleton
-        # 'geocentric' (default): every effector is root_pos + (joint - root) * scale.
-        #   A single scalar per joint cannot match differing body proportions in
-        #   every pose (e.g. long-armed actor hanging arms -> target above the
-        #   robot's natural hang -> folded elbows).
-        # 'segmental': effector = parent_effector + (joint - parent) * scale, so
-        #   each segment is remapped to the ROBOT's segment length. Targets stay
-        #   reachable (child always within segment length of its parent) and a
-        #   hanging human arm maps to a hanging robot arm. Requires joint_scales
-        #   calibrated as per-segment length ratios (calibration 'segmental' mode).
-        self.scaling_mode = config.get('scaling_mode', 'geocentric')
-        if self.scaling_mode not in ('geocentric', 'segmental'):
-            raise ValueError(f"[ERROR]: Unknown scaling_mode [{self.scaling_mode}]")
+
+        # Two mapping modes, selectable PER BODY GROUP (upper / lower):
+        # - geocentric (default): effector = root_pos + (joint - root) * scale.
+        # - segmental: effector = parent_effector + (joint - parent) * segment
+        #   length ratio.
+        # Requires BOTH calibration sets when mixing ('joint_scales' /
+        # 'joint_offsets' = geocentric, plus 'joint_scales_segmental' /
+        # 'joint_offsets_segmental'). Constructor args override config keys;
+        # legacy 'scaling_mode: segmental' still switches BOTH groups.
+        legacy_mode = config.get('scaling_mode', 'geocentric')
+        if legacy_mode not in ('geocentric', 'segmental'):
+            raise ValueError(f"[ERROR]: Unknown scaling_mode [{legacy_mode}]")
+        if segmental_upper is None:
+            segmental_upper = bool(config.get('segmental_upper', legacy_mode == 'segmental'))
+        if segmental_lower is None:
+            segmental_lower = bool(config.get('segmental_lower', legacy_mode == 'segmental'))
+        self.segmental_upper = bool(segmental_upper)
+        self.segmental_lower = bool(segmental_lower)
 
         ratio = human_height / config['human_height_assumption']
-        joint_scales = config['joint_scales']
-        for key in joint_scales.keys():
-            joint_scales[key] *= ratio
+        joint_scales_geo = {k: v * ratio for k, v in config['joint_scales'].items()}
 
-        joint_offsets = {}
-        if offsets_file is not None:
-            joint_offset_data = io_utils.load_json(offsets_file)['joint_offsets']
+        joint_scales_seg = config.get('joint_scales_segmental')
+        if joint_scales_seg is not None:
+            joint_scales_seg = {k: v * ratio for k, v in joint_scales_seg.items()}
+        elif legacy_mode == 'segmental':
+            # Legacy segmental config: 'joint_scales' already holds segment ratios.
+            joint_scales_seg = dict(joint_scales_geo)
         else:
-            joint_offset_data = config['joint_offsets']
-        for joint_name, entry in joint_offset_data.items():
-            t_offset, q_offset = entry
-            joint_offsets[joint_name] = wp.transform(
-                wp.vec3(*t_offset),
-                wp.normalize(wp.quat(*q_offset)))
+            joint_scales_seg = None
 
-        # SOMA convention: ToeBase shares the Toe joint's offset. Native skeletons
-        # may already define ToeBase directly (and have no "Toe"), so only alias
-        # when a "Toe" entry exists and "ToeBase" is not already provided.
-        if "LeftToe" in joint_offsets:
-            joint_offsets.setdefault("LeftToeBase", joint_offsets["LeftToe"])
-        if "RightToe" in joint_offsets:
-            joint_offsets.setdefault("RightToeBase", joint_offsets["RightToe"])
+        if joint_scales_seg is None:
+            if self.segmental_upper or self.segmental_lower:
+                print("[WARN]: segmental mapping requested but the scaler config has no "
+                      "'joint_scales_segmental' (recalibrate / One-Click Calibrate to "
+                      "generate both sets); using geocentric scales as a stand-in.")
+            joint_scales_seg = dict(joint_scales_geo)
 
-        self.mapped_joints = [name for name in self.skeleton.joint_names if name in joint_scales.keys()]
-        self.mapped_joint_indices = wp.array([self.skeleton.joint_index(name) for name in self.mapped_joints], dtype=wp.int32)
-        self.mapped_joint_scales = wp.array([joint_scales[name] for name in self.mapped_joints], dtype=wp.float32)
-        self.mapped_joint_offsets = wp.array([joint_offsets[name] for name in self.mapped_joints], dtype=wp.transform)
+        # Offsets: geocentric from offsets_file (or config); segmental optional.
+        if offsets_file is not None:
+            offset_data = io_utils.load_json(offsets_file)
+        else:
+            offset_data = config
+        joint_offsets_geo = _offsets_to_wp_dict(offset_data['joint_offsets'])
+        seg_offset_raw = offset_data.get('joint_offsets_segmental')
+        if seg_offset_raw is None and legacy_mode == 'segmental':
+            seg_offset_raw = offset_data['joint_offsets']
+        if seg_offset_raw is not None:
+            joint_offsets_seg = _offsets_to_wp_dict(seg_offset_raw)
+        else:
+            joint_offsets_seg = dict(joint_offsets_geo)
+
+        self.mapped_joints = [name for name in self.skeleton.joint_names if name in joint_scales_geo]
+        self.mapped_joint_indices = wp.array(
+            [self.skeleton.joint_index(name) for name in self.mapped_joints], dtype=wp.int32)
+
+        lower_mask = bvh_utils.lower_body_joint_mask(self.mapped_joints)
+        self._lower_mask = lower_mask  # numpy bool, for set_segmental_modes
+        self._joint_scales_geo = joint_scales_geo
+        self._joint_scales_seg = joint_scales_seg
+        self._joint_offsets_geo = joint_offsets_geo
+        self._joint_offsets_seg = joint_offsets_seg
 
         joint_parents = config['joint_parents']
         self.mapped_joint_parents = [
@@ -86,14 +130,57 @@ class HumanToRobotScaler:
                     f"[{self.mapped_joints[i]}] before its parent [{self.mapped_joints[p]}]")
         self.wp_mapped_joint_parents = wp.array(self.mapped_joint_parents, dtype=wp.int32)
 
+        self._rebuild_mapping_arrays()
+
         # Standing references for per-axis motion-amplitude scaling, injected by
         # the pipeline once the init pose is known. Default to origin / zeros,
         # which (together with amp == (1,1,1)) reproduces the original behaviour.
-        #   ref_root: raw unscaled root world position (root-only mode).
-        #   ref_effectors: standing effector world positions (full-body mode).
         self.ref_root = wp.vec3(0.0, 0.0, 0.0)
         self.ref_effectors = wp.array(
             [wp.vec3(0.0, 0.0, 0.0)] * len(self.mapped_joints), dtype=wp.vec3)
+
+    def _rebuild_mapping_arrays(self):
+        """Refresh per-joint scale/offset/flag wp arrays from current mode flags."""
+        is_segmental = []
+        scales = []
+        offsets = []
+        for i, name in enumerate(self.mapped_joints):
+            use_seg = bool(self._lower_mask[i]) if self.segmental_lower else False
+            if not self._lower_mask[i]:
+                use_seg = bool(self.segmental_upper)
+            is_segmental.append(1 if use_seg else 0)
+            if use_seg:
+                scales.append(self._joint_scales_seg.get(name, self._joint_scales_geo[name]))
+                offsets.append(self._joint_offsets_seg.get(
+                    name, self._joint_offsets_geo.get(name, wp.transform_identity())))
+            else:
+                scales.append(self._joint_scales_geo[name])
+                offsets.append(self._joint_offsets_geo.get(name, wp.transform_identity()))
+
+        self.mapped_joint_scales = wp.array(scales, dtype=wp.float32)
+        self.mapped_joint_offsets = wp.array(offsets, dtype=wp.transform)
+        self.mapped_joint_is_segmental = wp.array(is_segmental, dtype=wp.int32)
+        # Back-compat alias used by a few call sites / debugging.
+        self.scaling_mode = (
+            'segmental' if (self.segmental_upper and self.segmental_lower)
+            else 'mixed' if (self.segmental_upper or self.segmental_lower)
+            else 'geocentric')
+
+    def set_segmental_modes(self, upper=None, lower=None):
+        """Toggle upper/lower segmental mapping without rebuilding the scaler.
+
+        Args:
+            upper: New upper-body flag, or ``None`` to leave unchanged.
+            lower: New lower-body flag, or ``None`` to leave unchanged.
+        """
+        if upper is not None:
+            self.segmental_upper = bool(upper)
+        if lower is not None:
+            self.segmental_lower = bool(lower)
+        # If segmental was requested but we only have a geo copy of the scales
+        # (no real segmental calibration), still allow the mode — scales fall
+        # back to geo values already stored in ``_joint_scales_seg``.
+        self._rebuild_mapping_arrays()
 
     def set_amplitude_reference(self, root_world_position):
         """Set the standing root reference for motion-amplitude scaling.
@@ -178,7 +265,7 @@ class HumanToRobotScaler:
             in_mapped_joint_scales  : wp.array(dtype=wp.float32),
             in_mapped_joint_offsets : wp.array(dtype=wp.transform),
             in_mapped_joint_parents : wp.array(dtype=wp.int32),
-            in_segmental            : wp.bool,
+            in_is_segmental         : wp.array(dtype=wp.int32),
             in_scale_animation      : wp.bool,
             in_root_amp_scale       : wp.vec3,
             in_ref_root             : wp.vec3,
@@ -189,7 +276,7 @@ class HumanToRobotScaler:
             HumanToRobotScaler.wp_compute_scaled_effectors(
                 in_num_mapped_joints, in_global_pose, in_mapped_joint_indices,
                 in_mapped_joint_scales, in_mapped_joint_offsets,
-                in_mapped_joint_parents, in_segmental, in_scale_animation,
+                in_mapped_joint_parents, in_is_segmental, in_scale_animation,
                 in_root_amp_scale, in_ref_root, in_ref_effectors, in_full_amp_scale, out_result)
 
         wp_global_pose = wp.array([wp.transform_identity()] * skeleton_instance.num_joints, dtype=wp.transform)
@@ -216,7 +303,7 @@ class HumanToRobotScaler:
                 self.mapped_joint_scales,
                 self.mapped_joint_offsets,
                 self.wp_mapped_joint_parents,
-                self.scaling_mode == 'segmental',
+                self.mapped_joint_is_segmental,
                 scale_animation,
                 root_amp,
                 self.ref_root,
@@ -277,7 +364,7 @@ class HumanToRobotScaler:
             in_mapped_joint_scales  : wp.array(dtype=wp.float32),
             in_mapped_joint_offsets : wp.array(dtype=wp.transform),
             in_mapped_joint_parents : wp.array(dtype=wp.int32),
-            in_segmental            : wp.bool,
+            in_is_segmental         : wp.array(dtype=wp.int32),
             in_scale_animation      : wp.bool,
             in_root_amp_scale       : wp.vec3,
             in_ref_root             : wp.vec3,
@@ -289,7 +376,7 @@ class HumanToRobotScaler:
             HumanToRobotScaler.wp_compute_scaled_effectors(
                in_num_mapped_joints, in_global_pose[frame_idx], in_mapped_joint_indices,
                in_mapped_joint_scales, in_mapped_joint_offsets,
-               in_mapped_joint_parents, in_segmental, in_scale_animation,
+               in_mapped_joint_parents, in_is_segmental, in_scale_animation,
                in_root_amp_scale, in_ref_root, in_ref_effectors, in_full_amp_scale, out_result[frame_idx])
 
         wp_global_poses = wp.empty(shape=(animation_buffer.num_frames, self.skeleton.num_joints), dtype=wp.transform)
@@ -316,7 +403,7 @@ class HumanToRobotScaler:
                 self.mapped_joint_scales,
                 self.mapped_joint_offsets,
                 self.wp_mapped_joint_parents,
-                self.scaling_mode == 'segmental',
+                self.mapped_joint_is_segmental,
                 scale_animation,
                 root_amp,
                 self.ref_root,
@@ -371,7 +458,7 @@ class HumanToRobotScaler:
         in_mapped_joint_scales  : wp.array(dtype=wp.float32),
         in_mapped_joint_offsets : wp.array(dtype=wp.transform),
         in_mapped_joint_parents : wp.array(dtype=wp.int32),
-        in_segmental            : wp.bool,
+        in_is_segmental         : wp.array(dtype=wp.int32),
         in_scale_animation      : wp.bool,
         in_root_amp_scale       : wp.vec3,
         in_ref_root             : wp.vec3,
@@ -404,7 +491,7 @@ class HumanToRobotScaler:
             scale = wp.where(in_scale_animation, wp.vec3(in_mapped_joint_scales[i]), wp.vec3(1.0, 1.0, in_mapped_joint_scales[i]))
 
             parent = in_mapped_joint_parents[i]
-            if in_segmental and parent >= 0:
+            if in_is_segmental[i] != 0 and parent >= 0:
                 # Segment-relative: child sits at parent's mapped position plus
                 # the human segment vector rescaled to robot segment length.
                 parent_pose_t = in_global_pose[in_mapped_joint_indices[parent]].p
