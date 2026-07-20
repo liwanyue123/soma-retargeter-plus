@@ -69,7 +69,7 @@ def _split_normals_by_angle(vertices, faces, angle_deg=30.0):
     return new_vertices.astype(np.float32), new_indices, corner_normals.astype(np.float32)
 
 
-def sharpen_visual_mesh_normals(builder, angle_deg=30.0):
+def sharpen_visual_mesh_normals(builder, angle_deg=25.0):
     """
     Rebuild all visible mesh shapes in a ``ModelBuilder`` with sharp-edge normals.
 
@@ -79,10 +79,13 @@ def sharpen_visual_mesh_normals(builder, angle_deg=30.0):
     Args:
         builder: Newton ``ModelBuilder`` holding freshly imported robot shapes.
         angle_deg: Crease angle passed to :func:`_split_normals_by_angle`.
+            Default 25° keeps panel edges, avoids crack-like hard creases on
+            curved STL shells that read as surface damage.
     """
     import newton
 
     processed = set()
+    n_meshes = 0
     for i, source in enumerate(builder.shape_source):
         if source is None or id(source) in processed:
             continue
@@ -103,6 +106,11 @@ def sharpen_visual_mesh_normals(builder, angle_deg=30.0):
             source._uvs = source._uvs[np.asarray(indices, dtype=np.int32).reshape(-1)]
         source._cached_hash = None
         source.mesh = None
+        n_meshes += 1
+    print(
+        f"[INFO]: HQ visuals — sharpened normals on {n_meshes} mesh(es) "
+        f"(crease={angle_deg:.0f}°)."
+    )
 
 
 def create_child_parent_map(model):

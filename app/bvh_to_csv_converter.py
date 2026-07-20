@@ -122,20 +122,25 @@ class Viewer:
         self.viewer.renderer.set_title("BVH to CSV Converter")
         self.viewer.register_ui_callback(lambda ui: self.gui(ui), position="free")
 
+        # Dual articulations required for origin+TO overlay / side-by-side.
+        # Enable via --to-playback (or config to_playback=true). Newton set_model
+        # is one-shot, so this must be decided before building the model.
+        self.to_playback_requested = bool(self.config.get("to_playback", False))
+
         # HQ visuals: crease-aware mesh normals (cosmetic). Baked at import time;
         # Newton's GL viewer only allows set_model() once, so toggling mid-session
         # cannot rebuild — preference is saved and applied on the next launch.
-        self.hq_visuals = self._load_hq_visuals_pref()
+        # TO playback defaults HQ ON (no pref file) because melted CAD normals
+        # are especially noticeable in dual-robot studio view.
+        self.hq_visuals = self._load_hq_visuals_pref(
+            default_on=self.to_playback_requested)
         self.hq_visuals_active = self.hq_visuals
+
         # Mapping mode: default geocentric (original). Segmental can be enabled
         # independently for upper / lower body; applied on next Retarget.
         self.segmental_upper = False
         self.segmental_lower = False
 
-        # Dual articulations required for origin+TO overlay / side-by-side.
-        # Enable via --to-playback (or config to_playback=true). Newton set_model
-        # is one-shot, so this must be decided before building the model.
-        self.to_playback_requested = bool(self.config.get("to_playback", False))
         self.num_robots = 2 if self.to_playback_requested else 1
         self.robot_offsets = [
             wp.transform(
@@ -208,8 +213,10 @@ class Viewer:
         self.to_playback_layout_options = ["overlay", "side_by_side"]
         self.to_playback_force_scale = 0.025
         self.to_playback_show_forces = True
-        # Real alpha when newton_alpha patch is active (1=solid, ~0.38=ghost).
-        self.to_playback_origin_opacity = 0.38
+        # Real alpha when newton_alpha patch is active (1=solid, ~0.28=ghost).
+        # Keep modest so coincident overlay does not mottled the TO shell.
+        self.to_playback_show_origin = True
+        self.to_playback_origin_opacity = 0.28
         self.to_playback_run_dir = str(self.config.get("to_run_dir") or "")
         self._to_contact_body_indices = None
         self._to_contact_sites = ()
@@ -237,7 +244,7 @@ class Viewer:
     def _hq_visuals_pref_path(self):
         return io_utils.get_project_root() / ".soma_hq_visuals"
 
-    def _load_hq_visuals_pref(self):
+    def _load_hq_visuals_pref(self, default_on: bool = False):
         """Resolve HQ visuals preference: env ``SOMA_HQ_VISUALS`` overrides file."""
         env = os.environ.get("SOMA_HQ_VISUALS")
         if env is not None:
@@ -245,7 +252,7 @@ class Viewer:
         path = self._hq_visuals_pref_path()
         if path.is_file():
             return path.read_text().strip() == "1"
-        return False
+        return bool(default_on)
 
     def _save_hq_visuals_pref(self, enabled):
         path = self._hq_visuals_pref_path()
@@ -259,6 +266,11 @@ class Viewer:
         toggles only update the saved preference — restart the app to rebuild.
         """
         self.robot_builder = newton.ModelBuilder()
+        if self.hq_visuals:
+            print("[INFO]: Building robot with High Quality Visuals (crease normals)…")
+        else:
+            print("[INFO]: Building robot with default (fast) mesh normals. "
+                  "Enable High Quality Visuals + restart for sharper CAD edges.")
         pipeline_utils.add_robot_model(
             self.robot_builder, self.robot_type, hq_visuals=self.hq_visuals)
 
@@ -277,6 +289,10 @@ class Viewer:
             int(i * self.robot_num_joint_q) for i in range(self.model.articulation_count)]
         self.robot_default_joint_q_values = self.model.joint_q.numpy()
         self.hq_visuals_active = self.hq_visuals
+        print(
+            f"[INFO]: HQ visuals {'ACTIVE' if self.hq_visuals_active else 'OFF'} "
+            f"for this session (checkbox only applies after restart)."
+        )
 
     def _init_calibration(self):
         """Set up state for the in-app bias-calibration panel.
@@ -775,6 +791,8 @@ class Viewer:
         if not (self.to_playback_enabled and self.to_playback_data is not None
                 and self.to_playback_show_forces
                 and self._to_contact_body_indices is not None):
+            if self.to_playback_enabled:
+                to_force_utils.clear_contact_force_overlays(self.viewer)
             return
         body_q = self.state.body_q.numpy()
         positions = to_force_utils.contact_world_positions(
@@ -786,6 +804,7 @@ class Viewer:
             forces,
             force_scale=self.to_playback_force_scale,
         )
+        to_force_utils.draw_contact_force_reflections(self.viewer)
 
     def load_csv_file(self, path):
         self.robot_csv_animation_buffers[0] = csv_utils.load_csv(path, csv_config=self.csv_config)
@@ -832,6 +851,15 @@ class Viewer:
 
         self._apply_to_playback_layout()
         self.playback_time = 0.0
+        q0 = data.sample_to(0.0)
+        to_force_utils.set_studio_grid_origin_from_joint_q(
+            self.viewer,
+            self.model,
+            q0,
+            robot_index=1,
+            robot_offset=self.robot_offsets[1],
+        )
+        self.update_robot_states()
         self.playback_total_time = float(data.duration)
         self.is_playing = True
         print(f"[INFO]: {self.to_playback_status}")
@@ -841,14 +869,27 @@ class Viewer:
             return
         self.robot_offsets = to_force_utils.default_layout_offsets(self.to_playback_layout)
         to_force_utils.apply_studio_environment(self.viewer)
+        opacity = (
+            float(self.to_playback_origin_opacity)
+            if self.to_playback_show_origin else 0.0)
         (self._to_original_shape_colors,
          self._to_original_shape_materials) = to_force_utils.apply_to_playback_appearance(
             self.viewer,
             self.model,
-            origin_opacity=self.to_playback_origin_opacity,
+            origin_opacity=opacity,
             original_colors=self._to_original_shape_colors,
             original_materials=self._to_original_shape_materials,
         )
+        if self.to_playback_data is not None:
+            q0 = self.to_playback_data.sample_to(0.0)
+            to_force_utils.set_studio_grid_origin_from_joint_q(
+                self.viewer,
+                self.model,
+                q0,
+                robot_index=1,
+                robot_offset=self.robot_offsets[1],
+            )
+            self.update_robot_states()
 
     def clear_to_playback(self):
         self.to_playback_data = None
@@ -861,6 +902,7 @@ class Viewer:
             self._to_original_shape_colors,
             self._to_original_shape_materials)
         to_force_utils.clear_contact_force_overlays(self.viewer)
+        to_force_utils.clear_floor_reflections(self.viewer)
 
     def load_bvh_file(self, path):
         self._loaded_bvh_path = path
@@ -1043,6 +1085,8 @@ class Viewer:
         self._render_scene_objects()
 
         self.viewer.log_state(self.state)
+        if self.to_playback_enabled:
+            to_force_utils.draw_floor_reflections(self.viewer, self.model)
         self._render_to_playback_forces()
 
         if self.show_ik_map_axes:
@@ -1255,12 +1299,20 @@ class Viewer:
                 if self.hq_visuals != self.hq_visuals_active:
                     print("[INFO]: HQ visuals preference saved; restart the app to apply "
                           "(Newton viewer set_model can only be called once).")
+            if self.hq_visuals_active:
+                ui.text_colored(
+                    ui.ImVec4(0.45, 0.9, 0.55, 1.0),
+                    "HQ ACTIVE this session (crease normals baked at load).")
+            else:
+                ui.text_colored(
+                    ui.ImVec4(1.0, 0.55, 0.35, 1.0),
+                    "HQ OFF this session — mesh looks melted/soft.")
             if self.hq_visuals != self.hq_visuals_active:
                 ui.text_colored(
                     ui.ImVec4(1.0, 0.75, 0.3, 1.0),
                     "Restart app to apply HQ visuals change.")
             else:
-                ui.text_disabled("Mesh normals baked at load (~1.5s when ON).")
+                ui.text_disabled("Toggle + restart to change (~1.5s extra load when ON).")
             if self.show_effector_targets and self._effector_target_status:
                 ui.text_colored(ui.ImVec4(1.0, 0.6, 0.4, 1.0), self._effector_target_status)
             _, self.show_gizmos = ui.checkbox("Show Gizmos", self.show_gizmos)
@@ -1388,6 +1440,13 @@ class Viewer:
 
         changed_f, self.to_playback_show_forces = ui.checkbox(
             "Show contact forces", self.to_playback_show_forces)
+        changed_o, self.to_playback_show_origin = ui.checkbox(
+            "Show origin ghost", self.to_playback_show_origin)
+        if changed_o:
+            self._apply_to_playback_layout()
+        ui.text_disabled(
+            "If the shell looks torn/mottled, uncheck origin ghost to confirm "
+            "overlay z-fighting (then use side_by_side or keep a faint ghost).")
         ui.set_next_item_width(200)
         sc_changed, sc_val = ui.slider_float(
             "force scale##toplayfscale",
@@ -1402,7 +1461,11 @@ class Viewer:
             float(self.to_playback_origin_opacity), 0.05, 1.0, "%.2f")
         if op_changed:
             self.to_playback_origin_opacity = op_val
-            self._apply_to_playback_layout()
+            if self.to_playback_show_origin:
+                self._apply_to_playback_layout()
+        ui.text_disabled(
+            "Opacity of the origin/reference robot (ghost). "
+            "1 = solid, ~0.3 = typical ghost.")
         from soma_retargeter.to_playback import newton_alpha as _na
         if _na.is_mesh_alpha_enabled():
             ui.text_disabled("True mesh alpha (Newton GL patched).")
@@ -1412,6 +1475,8 @@ class Viewer:
         if ui.button("Reset studio look##toplayenv"):
             to_force_utils.apply_studio_environment(self.viewer)
             self._apply_to_playback_layout()
+        ui.text_disabled(
+            "Studio: soft gray void, ~1m floor grid, horizon fog (no tex needed).")
 
         if self.to_playback_data is not None:
             d = self.to_playback_data
@@ -2211,9 +2276,36 @@ def main():
     # Peek flags before ViewerGL constructs its shaders so we can patch alpha.
     import sys
     if "--to-playback" in sys.argv or "--to-run-dir" in sys.argv:
-        from soma_retargeter.to_playback.newton_alpha import enable_mesh_alpha
+        from soma_retargeter.to_playback.newton_alpha import (
+            enable_mesh_alpha,
+            enable_soft_shadow_bias,
+            enable_isaac_grid_floor,
+            enable_studio_horizon_fog,
+            enable_studio_sky_gradient,
+            enable_studio_floor_matte,
+            enable_studio_floor_alpha,
+            enable_studio_draw_order,
+            enable_studio_reflect_fade,
+        )
         enable_mesh_alpha()
-        print("[INFO]: Newton GL mesh-alpha patch enabled")
+        ok_grid = enable_isaac_grid_floor()
+        ok_matte = enable_studio_floor_matte()
+        ok_falpha = enable_studio_floor_alpha()
+        ok_order = enable_studio_draw_order()
+        ok_refl = enable_studio_reflect_fade()
+        ok_fog = enable_studio_horizon_fog()
+        ok_sky = enable_studio_sky_gradient()
+        enable_soft_shadow_bias()
+        print(
+            "[INFO]: Newton GL patches: mesh-alpha, "
+            f"isaac-grid={'on' if ok_grid else 'FAIL'}, "
+            f"floor-metal={'on' if ok_matte else 'FAIL'}, "
+            f"floor-alpha={'on' if ok_falpha else 'FAIL'}, "
+            f"draw-order={'on' if ok_order else 'FAIL'}, "
+            f"reflect-fade={'on' if ok_refl else 'FAIL'}, "
+            f"horizon-fog={'on' if ok_fog else 'FAIL'}, "
+            f"sky-grad={'on' if ok_sky else 'FAIL'}, soft-shadow"
+        )
 
     viewer, args = newton.examples.init(parser)
     if not pathlib.Path(args.config).exists():

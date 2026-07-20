@@ -7,7 +7,7 @@
     "joint_offsets_config": "pndbotics_adam_lite/mydata2/mydata2_to_adam_lite_offsets_config.json",
     "feet_stabilizer_config": "pndbotics_adam_lite/adam_lite_feet_stabilizer_config.json",
     "model_height": 1.65,
-    "ik_iterations": 24,
+    "ik_iterations": 48,
     "joint_limit_weight": 10.0,
     "smooth_joint_filter_weight": 5.5,
     "collision_weight": 0.0,
@@ -18,7 +18,9 @@
         "shoulderYawLeft": 0.3,
         "shoulderPitchRight": 0.1,
         "shoulderRollRight": 1.0,
-        "shoulderYawRight": 0.3
+        "shoulderYawRight": 0.3,
+        "wristYawLeft": 1.0,
+        "wristYawRight": 1.0
     },
     "ik_map": {
         "Hips": {
@@ -30,44 +32,44 @@
         "Spine1": {
             "t_body": "torso",
             "r_body": "torso",
-            "t_weight": 0.7,
-            "r_weight": 0.7
+            "t_weight": 10.0,
+            "r_weight": 1.0
         },
         "LeftArm": {
             "t_body": "shoulderRollLeft",
             "r_body": "shoulderRollLeft",
-            "t_weight": 1.5,
-            "r_weight": 0.15
+            "t_weight": 1.0,
+            "r_weight": 0.0
         },
         "LeftForeArm": {
             "t_body": "elbowLeft",
             "r_body": "elbowLeft",
             "t_weight": 1.0,
-            "r_weight": 0.5
+            "r_weight": 0.0
         },
         "LeftHand": {
             "t_body": "handLeft",
             "r_body": "handLeft",
-            "t_weight": 2.0,
-            "r_weight": 0.5
+            "t_weight": 5.0,
+            "r_weight": 0.3
         },
         "RightArm": {
             "t_body": "shoulderRollRight",
             "r_body": "shoulderRollRight",
-            "t_weight": 1.5,
-            "r_weight": 0.15
+            "t_weight": 1.0,
+            "r_weight": 0.0
         },
         "RightForeArm": {
             "t_body": "elbowRight",
             "r_body": "elbowRight",
             "t_weight": 1.0,
-            "r_weight": 0.5
+            "r_weight": 0.0
         },
         "RightHand": {
             "t_body": "handRight",
             "r_body": "handRight",
-            "t_weight": 2.0,
-            "r_weight": 0.5
+            "t_weight": 5.0,
+            "r_weight": 0.3
         },
         "LeftUpLeg": {
             "t_body": "hipRollLeft",
@@ -106,5 +108,7 @@
             "r_weight": 2.0
         }
     },
-    "retarget_source_position_scale": 1.24
+    "retarget_source_position_scale": 1.058,
+    "retarget_source_position_scale_upper": 1.0,
+    "retarget_source_position_scale_lower": 1.0
 }

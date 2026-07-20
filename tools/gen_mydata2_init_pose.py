@@ -22,7 +22,7 @@ Y-up axes for this rig:  up = +Y,  down = -Y,  forward = +Z (toes),  lateral = X
 
 Output: soma_retargeter/configs/sources/mydata2/init_pose.bvh   (single frame)
 Run:    python tools/gen_mydata2_init_pose.py \
-            [--src dataset/my_data2/Roundhouse_kick_take_001_B.bvh]
+            [--src dataset/idle_01_take_001_A.bvh]
 """
 import argparse
 import os
@@ -31,7 +31,7 @@ from scipy.spatial.transform import Rotation as Rot
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.join(_HERE, "..")
-_DEFAULT_SRC = os.path.join(_ROOT, "dataset", "my_data2", "Roundhouse_kick_take_001_B.bvh")
+_DEFAULT_SRC = os.path.join(_ROOT, "dataset", "idle_01_take_001_A.bvh")
 _OUT = os.path.join(_ROOT, "soma_retargeter", "configs", "sources", "mydata2", "init_pose.bvh")
 
 DOWN = np.array([0.0, -1.0, 0.0])     # upper arm points at the ground
