@@ -18,6 +18,8 @@ import soma_retargeter.assets.csv as csv_utils
 import soma_retargeter.utils.io_utils as io_utils
 import soma_retargeter.pipelines.utils as pipeline_utils
 import soma_retargeter.robotics.calibration as calibration_utils
+import soma_retargeter.to_playback as to_playback
+from soma_retargeter.to_playback import forces as to_force_utils
 
 from soma_retargeter.renderers.skeleton_renderer import SkeletonRenderer
 from soma_retargeter.renderers.mesh_renderer import SkeletalMeshRenderer
@@ -130,9 +132,18 @@ class Viewer:
         self.segmental_upper = False
         self.segmental_lower = False
 
-        self.num_robots = 1
-        self.robot_offsets = [wp.transform(wp.vec3(0.0, i - (self.num_robots - 1) / 2.0, 0.0), wp.quat_identity()) for i in range(self.num_robots)]
+        # Dual articulations required for origin+TO overlay / side-by-side.
+        # Enable via --to-playback (or config to_playback=true). Newton set_model
+        # is one-shot, so this must be decided before building the model.
+        self.to_playback_requested = bool(self.config.get("to_playback", False))
+        self.num_robots = 2 if self.to_playback_requested else 1
+        self.robot_offsets = [
+            wp.transform(
+                wp.vec3(0.0, i - (self.num_robots - 1) / 2.0, 0.0),
+                wp.quat_identity())
+            for i in range(self.num_robots)]
         self._build_viewer_robot_model()
+        self._init_to_playback()
 
         self.coordinate_renderer = CoordinateRenderer()
         self.show_ik_map_axes = False
@@ -168,6 +179,50 @@ class Viewer:
         self._ik_map_body_indices = self._build_ik_map_body_indices()
         self._ik_map_label_data = []  # [(name, color_u32, (x,y,z)), ...] populated each frame
         self._init_scene_objects()
+
+        auto_run = self.config.get("to_run_dir")
+        if self.to_playback_requested and auto_run:
+            try:
+                self.load_to_playback_run(auto_run)
+            except Exception as exc:
+                print(f"[WARN]: Failed to auto-load TO run '{auto_run}': {exc}")
+
+    def _init_to_playback(self):
+        """State for the TO Playback panel (CIO history runs)."""
+        self.to_playback_enabled = bool(self.to_playback_requested)
+        self.to_playback_data = None
+        self.to_playback_status = (
+            "Launch with --to-playback for dual-robot origin+TO view."
+            if not self.to_playback_requested else
+            "Select a history run folder and Load.")
+        self.to_playback_robot_keys = to_playback.list_to_robot_keys()
+        # Prefer a key whose soma type matches the loaded robot.
+        self.to_playback_robot_idx = 0
+        for i, key in enumerate(self.to_playback_robot_keys):
+            spec = to_playback.get_to_robot_spec(key)
+            if spec.soma_robot_type == self.robot_type and spec.enabled:
+                self.to_playback_robot_idx = i
+                break
+        # Default overlay: origin + TO share the same root; drag gizmos to separate.
+        self.to_playback_layout = "overlay"
+        self.to_playback_layout_options = ["overlay", "side_by_side"]
+        self.to_playback_force_scale = 0.025
+        self.to_playback_show_forces = True
+        # Real alpha when newton_alpha patch is active (1=solid, ~0.38=ghost).
+        self.to_playback_origin_opacity = 0.38
+        self.to_playback_run_dir = str(self.config.get("to_run_dir") or "")
+        self._to_contact_body_indices = None
+        self._to_contact_sites = ()
+        self._to_original_shape_colors = None
+        self._to_original_shape_materials = None
+        if self.to_playback_requested and self.num_robots >= 2:
+            to_force_utils.apply_studio_environment(self.viewer)
+            (self._to_original_shape_colors,
+             self._to_original_shape_materials) = to_force_utils.apply_to_playback_appearance(
+                self.viewer, self.model,
+                origin_opacity=self.to_playback_origin_opacity)
+            self.robot_offsets = to_force_utils.default_layout_offsets(
+                self.to_playback_layout)
 
     def _init_scene_objects(self):
         """State for user-placed scene primitives (boxes, etc.)."""
@@ -716,9 +771,96 @@ class Viewer:
         if self.show_ik_map_axes:
             self._draw_ik_map_labels(ui)
 
+    def _render_to_playback_forces(self):
+        if not (self.to_playback_enabled and self.to_playback_data is not None
+                and self.to_playback_show_forces
+                and self._to_contact_body_indices is not None):
+            return
+        body_q = self.state.body_q.numpy()
+        positions = to_force_utils.contact_world_positions(
+            body_q, self._to_contact_body_indices, self._to_contact_sites)
+        forces = self.to_playback_data.sample_forces(self.playback_time)
+        to_force_utils.draw_contact_forces(
+            self.viewer,
+            positions,
+            forces,
+            force_scale=self.to_playback_force_scale,
+        )
+
     def load_csv_file(self, path):
         self.robot_csv_animation_buffers[0] = csv_utils.load_csv(path, csv_config=self.csv_config)
         self.compute_playback_total_time()
+
+    def load_to_playback_run(self, run_dir: str):
+        """Load a CIO history-run folder for origin+TO dual playback."""
+        if self.num_robots < 2:
+            raise RuntimeError(
+                "TO Playback needs dual robots. Relaunch with --to-playback "
+                "(and a matching --config for the robot, e.g. t800)."
+            )
+        robot_key = self.to_playback_robot_keys[self.to_playback_robot_idx]
+        spec = to_playback.get_to_robot_spec(robot_key)
+        if not spec.enabled:
+            raise ValueError(f"Robot '{robot_key}' is not enabled for TO playback yet.")
+        if spec.soma_robot_type != self.robot_type:
+            raise ValueError(
+                f"TO robot '{robot_key}' maps to '{spec.soma_robot_type}', but this "
+                f"viewer session loaded '{self.robot_type}'. Relaunch with the "
+                f"matching robot config."
+            )
+
+        data = to_playback.load_history_run(run_dir, robot_key=robot_key)
+        # Validate joint count vs Newton DOFs (7 free + nj).
+        expected = self.robot_num_joint_q
+        if data.origin_q_quat.shape[1] != expected or data.to_q_quat.shape[1] != expected:
+            raise ValueError(
+                f"TO q width mismatch: origin {data.origin_q_quat.shape[1]}, "
+                f"to {data.to_q_quat.shape[1]}, model expects {expected}."
+            )
+
+        self.to_playback_data = data
+        self.to_playback_run_dir = data.run_dir
+        self.to_playback_enabled = True
+        self.to_playback_status = data.status
+        self.calibration_mode = False
+        self._clear_reference_overlay()
+
+        self._to_contact_sites = to_playback.get_to_robot_spec(data.robot_key).contact_sites
+        # Forces are drawn on the TO robot (articulation index 1).
+        self._to_contact_body_indices = to_force_utils.build_contact_body_indices(
+            self.model, robot_index=1, sites=self._to_contact_sites)
+
+        self._apply_to_playback_layout()
+        self.playback_time = 0.0
+        self.playback_total_time = float(data.duration)
+        self.is_playing = True
+        print(f"[INFO]: {self.to_playback_status}")
+
+    def _apply_to_playback_layout(self):
+        if self.num_robots < 2:
+            return
+        self.robot_offsets = to_force_utils.default_layout_offsets(self.to_playback_layout)
+        to_force_utils.apply_studio_environment(self.viewer)
+        (self._to_original_shape_colors,
+         self._to_original_shape_materials) = to_force_utils.apply_to_playback_appearance(
+            self.viewer,
+            self.model,
+            origin_opacity=self.to_playback_origin_opacity,
+            original_colors=self._to_original_shape_colors,
+            original_materials=self._to_original_shape_materials,
+        )
+
+    def clear_to_playback(self):
+        self.to_playback_data = None
+        self.to_playback_enabled = False
+        self._to_contact_body_indices = None
+        self._to_contact_sites = ()
+        self.to_playback_status = "TO Playback cleared."
+        to_force_utils.restore_shape_appearance(
+            self.viewer,
+            self._to_original_shape_colors,
+            self._to_original_shape_materials)
+        to_force_utils.clear_contact_force_overlays(self.viewer)
 
     def load_bvh_file(self, path):
         self._loaded_bvh_path = path
@@ -760,6 +902,11 @@ class Viewer:
         self.compute_playback_total_time()
 
     def compute_playback_total_time(self):
+        if self.to_playback_enabled and self.to_playback_data is not None:
+            self.playback_total_time = float(self.to_playback_data.duration)
+            self.playback_time = wp.clamp(self.playback_time, 0.0, self.playback_total_time)
+            return
+
         bvh_max_time = 0.0
         for buffer in self.animation_buffers:
             if buffer is not None:
@@ -779,6 +926,27 @@ class Viewer:
                 self.model.joint_q,
                 wp.array(self.calibration_joint_q, dtype=wp.float32),
                 0, 0, len(self.calibration_joint_q))
+            newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state, None)
+            return
+
+        if (self.to_playback_enabled and self.to_playback_data is not None
+                and self.num_robots >= 2):
+            data = self.to_playback_data
+            samples = (
+                data.sample_origin(self.playback_time),
+                data.sample_to(self.playback_time),
+            )
+            for i in range(2):
+                robot_offset = self.robot_offsets[i]
+                joint_q_offset = self.robot_joint_q_offsets[i]
+                q = np.asarray(samples[i], dtype=np.float32)
+                root_tx = wp.mul(robot_offset, wp.transform(*q[:7]))
+                framed = np.concatenate(
+                    (np.asarray(root_tx, dtype=np.float32), q[7:])).astype(np.float32)
+                wp.copy(
+                    self.model.joint_q,
+                    wp.array(framed, dtype=wp.float32),
+                    joint_q_offset, 0, self.robot_num_joint_q)
             newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state, None)
             return
 
@@ -819,8 +987,11 @@ class Viewer:
                 self.playback_time = max(0.0, min(self.playback_time, self.playback_total_time))
 
         if not self.calibration_mode:
-            for i in range(len(self.animation_buffers)):
-                self.skeleton_instances[i].set_local_transforms(self.animation_buffers[i].sample(self.playback_time))
+            # Skip BVH skeleton updates while TO Playback owns the timeline.
+            if not (self.to_playback_enabled and self.to_playback_data is not None):
+                for i in range(len(self.animation_buffers)):
+                    self.skeleton_instances[i].set_local_transforms(
+                        self.animation_buffers[i].sample(self.playback_time))
 
         def clamp_gizmo_transform(tx: wp.transform):
             return wp.transform(
@@ -838,7 +1009,10 @@ class Viewer:
 
     def render(self):
         self.viewer.begin_frame(self.time)
-        if not self.calibration_mode and len(self.animation_buffers) > 0:
+        to_owns_timeline = (
+            self.to_playback_enabled and self.to_playback_data is not None)
+        if (not self.calibration_mode and not to_owns_timeline
+                and len(self.animation_buffers) > 0):
             for i in range(len(self.skeleton_instances)):
                 prev_xform = wp.transform(self.skeleton_instances[i].xform)
                 self.skeleton_instances[i].xform = wp.mul(self.animation_offsets[i], self.skeleton_instances[i].xform)
@@ -869,6 +1043,7 @@ class Viewer:
         self._render_scene_objects()
 
         self.viewer.log_state(self.state)
+        self._render_to_playback_forces()
 
         if self.show_ik_map_axes:
             self._render_ik_map_axes()
@@ -1120,11 +1295,133 @@ class Viewer:
         ui.separator()
 
         if ui.collapsing_header(
+                "TO Playback",
+                flags=ui.TreeNodeFlags_.default_open):
+            self._draw_to_playback_content(ui)
+
+        ui.separator()
+
+        if ui.collapsing_header(
                 "Scene Objects",
                 flags=ui.TreeNodeFlags_.default_open):
             self._draw_scene_objects_content(ui)
 
         ui.end()
+
+    def _draw_to_playback_content(self, ui):
+        """CIO history-run playback: origin (reference) + TO (optimized)."""
+        import tkinter as tk
+        from tkinter import filedialog as tk_filedialog
+
+        ui.text_colored(
+            ui.ImVec4(0.75, 0.85, 1.0, 1.0),
+            "Origin = reference clip   |   TO = optimized result")
+        if self.num_robots < 2:
+            ui.text_colored(
+                ui.ImVec4(1.0, 0.55, 0.35, 1.0),
+                "Dual robots not loaded. Relaunch with --to-playback.")
+            ui.text_wrapped(self.to_playback_status)
+            return
+
+        labels = []
+        for key in self.to_playback_robot_keys:
+            spec = to_playback.get_to_robot_spec(key)
+            suffix = "" if spec.enabled else " (soon)"
+            labels.append(f"{key}{suffix}")
+        changed, self.to_playback_robot_idx = ui.combo(
+            "Robot##toplayrobot", self.to_playback_robot_idx, labels)
+        robot_key = self.to_playback_robot_keys[self.to_playback_robot_idx]
+        spec = to_playback.get_to_robot_spec(robot_key)
+        if not spec.enabled:
+            ui.text_colored(
+                ui.ImVec4(1.0, 0.7, 0.3, 1.0),
+                f"'{robot_key}' is not enabled for TO playback.")
+        elif spec.soma_robot_type != self.robot_type:
+            cfg_hint = (
+                f"assets/{spec.converter_config}"
+                if spec.converter_config else
+                f"a {spec.soma_robot_type} converter config")
+            ui.text_colored(
+                ui.ImVec4(1.0, 0.7, 0.3, 1.0),
+                f"Needs --config {cfg_hint} "
+                f"(session is {self.robot_type}).")
+
+        layout_idx = self.to_playback_layout_options.index(self.to_playback_layout)
+        changed_l, layout_idx = ui.combo(
+            "Layout##toplaylayout", layout_idx, self.to_playback_layout_options)
+        if changed_l:
+            self.to_playback_layout = self.to_playback_layout_options[layout_idx]
+            self._apply_to_playback_layout()
+
+        ui.align_text_to_frame_padding()
+        ui.text("Run folder:")
+        if self.to_playback_run_dir:
+            ui.text_wrapped(self.to_playback_run_dir)
+        else:
+            ui.text_disabled("(none selected)")
+
+        if ui.button("Browse…##toplaybrowse"):
+            root = tk.Tk()
+            root.withdraw()
+            folder = tk_filedialog.askdirectory(
+                title="Select CIO history run folder",
+                initialdir=self.to_playback_run_dir or str(
+                    pathlib.Path.home()))
+            root.destroy()
+            if folder:
+                self.to_playback_run_dir = folder
+
+        ui.same_line()
+        if ui.button("Load##toplayload"):
+            if not self.to_playback_run_dir:
+                self.to_playback_status = "Select a run folder first."
+            else:
+                try:
+                    self.load_to_playback_run(self.to_playback_run_dir)
+                except Exception as exc:
+                    self.to_playback_status = f"Load failed: {exc}"
+                    print(f"[ERROR]: TO Playback load failed: {exc}")
+
+        ui.same_line()
+        if ui.button("Clear##toplayclear"):
+            self.clear_to_playback()
+
+        changed_f, self.to_playback_show_forces = ui.checkbox(
+            "Show contact forces", self.to_playback_show_forces)
+        ui.set_next_item_width(200)
+        sc_changed, sc_val = ui.slider_float(
+            "force scale##toplayfscale",
+            float(self.to_playback_force_scale), 0.005, 0.08, "%.3f")
+        if sc_changed:
+            self.to_playback_force_scale = sc_val
+        ui.text_disabled("Arrow length = |F|(N) * scale  (default 0.025)")
+
+        ui.set_next_item_width(200)
+        op_changed, op_val = ui.slider_float(
+            "origin opacity##toplayopacity",
+            float(self.to_playback_origin_opacity), 0.05, 1.0, "%.2f")
+        if op_changed:
+            self.to_playback_origin_opacity = op_val
+            self._apply_to_playback_layout()
+        from soma_retargeter.to_playback import newton_alpha as _na
+        if _na.is_mesh_alpha_enabled():
+            ui.text_disabled("True mesh alpha (Newton GL patched).")
+        else:
+            ui.text_disabled("Alpha patch inactive — using pale ghost fallback.")
+
+        if ui.button("Reset studio look##toplayenv"):
+            to_force_utils.apply_studio_environment(self.viewer)
+            self._apply_to_playback_layout()
+
+        if self.to_playback_data is not None:
+            d = self.to_playback_data
+            ui.text_colored(
+                ui.ImVec4(0.55, 0.9, 0.6, 1.0),
+                f"origin {d.origin_q_quat.shape[0]}f@{d.origin_dt:.4f}s  |  "
+                f"to {d.to_q_quat.shape[0]}f@{d.to_dt:.4f}s")
+            ui.text("transparent = origin   |   solid = TO")
+
+        ui.text_wrapped(self.to_playback_status)
 
     def _clear_reference_overlay(self):
         """Remove the zero-pose reference overlay (mesh for SOMA, bones otherwise)."""
@@ -1899,6 +2196,24 @@ def main():
         help="Source skeleton type (e.g. 'soma', 'mydata'). Overrides "
              "'retarget_source' in the config so you can run your own "
              "skeleton natively without editing the config file.")
+    parser.add_argument(
+        "--to-playback",
+        action="store_true",
+        help="Load dual robots and enable the TO Playback panel "
+             "(origin reference + optimized result side-by-side).")
+    parser.add_argument(
+        "--to-run-dir",
+        type=str,
+        default=None,
+        help="Optional CIO history run folder to auto-load when "
+             "--to-playback is set.")
+
+    # Peek flags before ViewerGL constructs its shaders so we can patch alpha.
+    import sys
+    if "--to-playback" in sys.argv or "--to-run-dir" in sys.argv:
+        from soma_retargeter.to_playback.newton_alpha import enable_mesh_alpha
+        enable_mesh_alpha()
+        print("[INFO]: Newton GL mesh-alpha patch enabled")
 
     viewer, args = newton.examples.init(parser)
     if not pathlib.Path(args.config).exists():
@@ -1906,6 +2221,13 @@ def main():
         exit(1)
 
     config = io_utils.load_json(args.config)
+    if args.to_playback:
+        config["to_playback"] = True
+        print("[INFO]: --to-playback: dual-robot TO Playback mode enabled")
+    if args.to_run_dir:
+        config["to_run_dir"] = args.to_run_dir
+        config["to_playback"] = True
+        print(f"[INFO]: --to-run-dir = {args.to_run_dir}")
     if args.data:
         print(f"[INFO]: --data override: retarget_source = '{args.data}'")
         config['retarget_source'] = args.data
