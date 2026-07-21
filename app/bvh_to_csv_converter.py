@@ -260,13 +260,77 @@ class Viewer:
         self.newton_snap_dir = str(self.config.get("newton_snap_dir") or "")
         self.newton_snap_align = "absolute"  # or "normalized"
         self.newton_snap_align_options = ["absolute", "normalized"]
-        self.newton_snap_resample_dt = 0.1
-        self.newton_snap_max_iter_id = 0
+        self.newton_snap_resample_dt = 0.5
+        self.newton_snap_max_visible_iters = 5
+        self.newton_snap_iter_alpha_min = 0.14
+        self.newton_snap_scrub_index = 0.0
+        self.newton_snap_iters_per_sec = 1.0
         self.newton_snap_focus_iter_id = 0
-        self.newton_snap_show_trails = True
-        self.newton_snap_show_poses = True
-        self.newton_snap_drive_robot = True
+        self.newton_snap_show_trails = False
+        self.newton_snap_show_meshes = True
+        self.newton_snap_show_skeleton = False
+        self.newton_snap_palette = "soft"
+        self.newton_snap_palette_options = list(
+            newton_snap_utils._SNAP_MOTION_PALETTE_OPTIONS)
         self.newton_snap_active = False
+        self._snap_robot_cache = None
+        self._load_newton_snap_prefs()
+
+    def _newton_snap_prefs_path(self):
+        return io_utils.get_project_root() / ".soma_newton_snap_prefs.json"
+
+    def _load_newton_snap_prefs(self):
+        path = self._newton_snap_prefs_path()
+        if not path.is_file():
+            return
+        try:
+            data = json.loads(path.read_text())
+        except Exception as exc:
+            print(f"[WARN]: Failed to load Newton snap prefs [{path}]: {exc}")
+            return
+        align = data.get("align")
+        if align in self.newton_snap_align_options:
+            self.newton_snap_align = align
+        if "resample_dt" in data:
+            self.newton_snap_resample_dt = float(
+                np.clip(float(data["resample_dt"]), 0.1, 2.0))
+        if "max_visible_iters" in data:
+            self.newton_snap_max_visible_iters = int(
+                np.clip(int(data["max_visible_iters"]), 1, 10))
+        if "iter_alpha_min" in data:
+            self.newton_snap_iter_alpha_min = float(
+                np.clip(float(data["iter_alpha_min"]), 0.0, 1.0))
+        pal = data.get("palette")
+        if pal in self.newton_snap_palette_options:
+            self.newton_snap_palette = pal
+        if "show_meshes" in data:
+            self.newton_snap_show_meshes = bool(data["show_meshes"])
+        if "show_skeleton" in data:
+            self.newton_snap_show_skeleton = bool(data["show_skeleton"])
+        if "show_trails" in data:
+            self.newton_snap_show_trails = bool(data["show_trails"])
+        if "snap_dir" in data and data["snap_dir"] and not self.newton_snap_dir:
+            self.newton_snap_dir = str(data["snap_dir"])
+
+    def _save_newton_snap_prefs(self):
+        path = self._newton_snap_prefs_path()
+        data = {
+            "_comment": "Persisted Newton Snapshots panel prefs "
+                        "(align / pose interval / trajs / opacity / color).",
+            "align": str(self.newton_snap_align),
+            "resample_dt": round(float(self.newton_snap_resample_dt), 4),
+            "max_visible_iters": int(self.newton_snap_max_visible_iters),
+            "iter_alpha_min": round(float(self.newton_snap_iter_alpha_min), 4),
+            "palette": str(self.newton_snap_palette),
+            "show_meshes": bool(self.newton_snap_show_meshes),
+            "show_skeleton": bool(self.newton_snap_show_skeleton),
+            "show_trails": bool(self.newton_snap_show_trails),
+            "snap_dir": str(self.newton_snap_dir or ""),
+        }
+        try:
+            path.write_text(json.dumps(data, indent=2) + "\n")
+        except Exception as exc:
+            print(f"[WARN]: Failed to save Newton snap prefs [{path}]: {exc}")
 
     def _to_playback_force_prefs_path(self):
         return io_utils.get_project_root() / ".soma_to_playback_force_prefs.json"
@@ -1154,13 +1218,6 @@ class Viewer:
         self.compute_playback_total_time()
 
     def compute_playback_total_time(self):
-        # Newton snapshots own the scrubber when active (even alongside TO).
-        if self.newton_snap_active and self.newton_snap_data is not None:
-            self.playback_total_time = float(
-                self.newton_snap_data.timeline_duration(self.newton_snap_align))
-            self.playback_time = wp.clamp(self.playback_time, 0.0, self.playback_total_time)
-            return
-
         if self.to_playback_enabled and self.to_playback_data is not None:
             self.playback_total_time = float(self.to_playback_data.duration)
             self.playback_time = wp.clamp(self.playback_time, 0.0, self.playback_total_time)
@@ -1188,40 +1245,8 @@ class Viewer:
             newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state, None)
             return
 
-        if (self.newton_snap_active and self.newton_snap_data is not None
-                and self.newton_snap_drive_robot):
-            q = self.newton_snap_data.sample_q(
-                self.newton_snap_focus_iter_id,
-                float(self.playback_time),
-                align=self.newton_snap_align)
-            robot_i = 1 if self.num_robots >= 2 else 0
-            if q is not None and q.shape[0] == self.robot_num_joint_q:
-                robot_offset = self.robot_offsets[robot_i]
-                joint_q_offset = self.robot_joint_q_offsets[robot_i]
-                q = np.asarray(q, dtype=np.float32)
-                root_tx = wp.mul(robot_offset, wp.transform(*q[:7]))
-                framed = np.concatenate(
-                    (np.asarray(root_tx, dtype=np.float32), q[7:])).astype(np.float32)
-                if (self.to_playback_enabled and self.to_playback_data is not None
-                        and self.num_robots >= 2):
-                    origin_q = np.asarray(
-                        self.to_playback_data.sample_origin(self.playback_time),
-                        dtype=np.float32)
-                    o_off = self.robot_offsets[0]
-                    o_tx = wp.mul(o_off, wp.transform(*origin_q[:7]))
-                    o_framed = np.concatenate(
-                        (np.asarray(o_tx, dtype=np.float32), origin_q[7:])
-                    ).astype(np.float32)
-                    wp.copy(
-                        self.model.joint_q,
-                        wp.array(o_framed, dtype=wp.float32),
-                        self.robot_joint_q_offsets[0], 0, self.robot_num_joint_q)
-                wp.copy(
-                    self.model.joint_q,
-                    wp.array(framed, dtype=wp.float32),
-                    joint_q_offset, 0, self.robot_num_joint_q)
-                newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state, None)
-                return
+        if self.newton_snap_active and self.newton_snap_data is not None:
+            return
 
         if (self.to_playback_enabled and self.to_playback_data is not None
                 and self.num_robots >= 2):
@@ -1278,11 +1303,22 @@ class Viewer:
         dt = float(np.clip(dt, 1e-4, 0.25))
         self.time += dt
         if self.is_playing and not self.calibration_mode:
-            self.playback_time += dt * float(self.playback_speed)
-            if self.playback_loop and self.playback_total_time > 0.0:
-                self.playback_time %= self.playback_total_time
+            if (self.newton_snap_active and self.newton_snap_data is not None
+                    and self.newton_snap_data.iters):
+                mx = float(max(0, len(self.newton_snap_data.iters) - 1))
+                self.newton_snap_scrub_index += (
+                    dt * float(self.playback_speed) * float(self.newton_snap_iters_per_sec))
+                if self.playback_loop and mx > 0.0:
+                    self.newton_snap_scrub_index %= (mx + 1.0)
+                else:
+                    self.newton_snap_scrub_index = float(np.clip(
+                        self.newton_snap_scrub_index, 0.0, mx))
             else:
-                self.playback_time = max(0.0, min(self.playback_time, self.playback_total_time))
+                self.playback_time += dt * float(self.playback_speed)
+                if self.playback_loop and self.playback_total_time > 0.0:
+                    self.playback_time %= self.playback_total_time
+                else:
+                    self.playback_time = max(0.0, min(self.playback_time, self.playback_total_time))
 
         if not self.calibration_mode:
             # Skip BVH skeleton updates while TO / Newton snapshots own the timeline.
@@ -1346,15 +1382,18 @@ class Viewer:
         self._render_to_playback_terrain()
 
         self.viewer.log_state(self.state)
+        if ns_owns_timeline:
+            newton_snap_utils.set_viewer_robots_hidden(self.viewer, self.model, True)
         if self.to_playback_requested and self.num_robots >= 2:
             to_force_utils.sync_studio_ground_tint(
                 self.viewer,
                 self.model,
                 original_colors=self._to_original_shape_colors,
             )
-        if self.to_playback_enabled:
+        if self.to_playback_enabled and not ns_owns_timeline:
             to_force_utils.draw_floor_reflections(self.viewer, self.model)
-        self._render_to_playback_forces()
+        if not ns_owns_timeline:
+            self._render_to_playback_forces()
         self._render_newton_snapshots()
 
         if self.show_ik_map_axes:
@@ -1814,15 +1853,22 @@ class Viewer:
     def _render_newton_snapshots(self):
         if not (self.newton_snap_active and self.newton_snap_data is not None):
             return
+        if self._snap_robot_cache is None or not self._snap_robot_cache.mesh_by_label:
+            self._snap_robot_cache = newton_snap_utils.prepare_snap_robot(
+                self.viewer, self.model, self.robot_builder)
         newton_snap_utils.draw_snapshot_overlays(
             self.viewer,
             self.newton_snap_data,
-            time_s=float(self.playback_time),
+            scrub_index=float(self.newton_snap_scrub_index),
             align=self.newton_snap_align,
             resample_dt=float(self.newton_snap_resample_dt),
-            max_iter_id=int(self.newton_snap_max_iter_id),
+            max_visible_iters=int(self.newton_snap_max_visible_iters),
             show_trails=bool(self.newton_snap_show_trails),
-            show_poses=bool(self.newton_snap_show_poses),
+            show_meshes=bool(self.newton_snap_show_meshes),
+            show_skeleton=bool(self.newton_snap_show_skeleton),
+            iter_alpha_min=float(self.newton_snap_iter_alpha_min),
+            palette=str(self.newton_snap_palette),
+            snap_cache=self._snap_robot_cache,
         )
 
     def load_newton_snapshots_folder(self, folder: str):
@@ -1848,21 +1894,37 @@ class Viewer:
         self.newton_snap_dir = data.folder
         self.newton_snap_active = True
         self.newton_snap_status = data.status
-        self.newton_snap_max_iter_id = data.iters[-1].iter_id
         self.newton_snap_focus_iter_id = data.iters[-1].iter_id
+        self.newton_snap_scrub_index = 0.0
         self.calibration_mode = False
         self._clear_reference_overlay()
-        self.playback_time = 0.0
+        self._snap_robot_cache = None
+        newton_snap_utils.invalidate_snapshot_overlay_cache()
         self.compute_playback_total_time()
         self.is_playing = True
-        self.update_robot_states()
+        self._snap_robot_cache = newton_snap_utils.prepare_snap_robot(
+            self.viewer, self.model, self.robot_builder)
+        newton_snap_utils.warm_snapshot_overlay_bank(
+            data,
+            self._snap_robot_cache,
+            align=self.newton_snap_align,
+            resample_dt=float(self.newton_snap_resample_dt),
+            max_visible_iters=int(self.newton_snap_max_visible_iters),
+            show_meshes=bool(self.newton_snap_show_meshes),
+            show_skeleton=bool(self.newton_snap_show_skeleton),
+            show_trails=bool(self.newton_snap_show_trails),
+            iter_alpha_min=float(self.newton_snap_iter_alpha_min),
+            palette=str(self.newton_snap_palette),
+        )
         print(f"[INFO]: {self.newton_snap_status}")
 
     def clear_newton_snapshots(self):
         self.newton_snap_data = None
         self.newton_snap_active = False
         self.newton_snap_status = "Newton Snapshots cleared."
+        self._snap_robot_cache = None
         newton_snap_utils.clear_snapshot_overlays(self.viewer)
+        newton_snap_utils.set_viewer_robots_hidden(self.viewer, self.model, False)
         self.compute_playback_total_time()
 
     def _draw_newton_snapshots_content(self, ui):
@@ -1872,10 +1934,10 @@ class Viewer:
 
         ui.text_colored(
             ui.ImVec4(0.75, 0.9, 1.0, 1.0),
-            "Overlay Newton iters (resampled). Blue=early → orange=late.")
+            "Scrub Newton iters (bottom bar). Coarse opaque mesh ghosts, pre-baked.")
         ui.text_wrapped(
-            "Align: absolute = same clock (s). "
-            "normalized = stretch each traj to progress τ∈[0,1].")
+            "Within each traj: blue→red along time (soft by default). "
+            "Newest iter solid; older iters fade.")
 
         ui.align_text_to_frame_padding()
         ui.text("Folder:")
@@ -1893,6 +1955,7 @@ class Viewer:
             root.destroy()
             if folder:
                 self.newton_snap_dir = folder
+                self._save_newton_snap_prefs()
 
         ui.same_line()
         if ui.button("Load##nsload"):
@@ -1901,6 +1964,7 @@ class Viewer:
             else:
                 try:
                     self.load_newton_snapshots_folder(self.newton_snap_dir)
+                    self._save_newton_snap_prefs()
                 except Exception as exc:
                     self.newton_snap_status = f"Load failed: {exc}"
                     print(f"[ERROR]: Newton Snapshots load failed: {exc}")
@@ -1909,65 +1973,99 @@ class Viewer:
         if ui.button("Clear##nsclear"):
             self.clear_newton_snapshots()
 
+        ui.same_line()
+        if ui.button("Save prefs##nssave"):
+            self._save_newton_snap_prefs()
+            self.newton_snap_status = (
+                "Saved snapshot prefs → .soma_newton_snap_prefs.json")
+
+        snap_prefs_dirty = False
+
         align_idx = self.newton_snap_align_options.index(self.newton_snap_align)
         changed_a, align_idx = ui.combo(
             "Align##nsalign", align_idx, self.newton_snap_align_options)
         if changed_a:
             self.newton_snap_align = self.newton_snap_align_options[align_idx]
-            self.compute_playback_total_time()
+            snap_prefs_dirty = True
 
         ui.set_next_item_width(200)
         rd_changed, rd_val = ui.slider_float(
-            "resample Δt##nsdt",
-            float(self.newton_snap_resample_dt), 0.02, 0.5, "%.3f")
+            "pose interval (s)##nsdt",
+            float(self.newton_snap_resample_dt), 0.1, 2.0, "%.2f")
         if rd_changed:
             self.newton_snap_resample_dt = float(rd_val)
+            snap_prefs_dirty = True
 
-        _, self.newton_snap_show_trails = ui.checkbox(
-            "Show base trails", self.newton_snap_show_trails)
-        _, self.newton_snap_show_poses = ui.checkbox(
-            "Show pose markers @ t", self.newton_snap_show_poses)
-        _, self.newton_snap_drive_robot = ui.checkbox(
-            "Drive solid robot (focus iter)", self.newton_snap_drive_robot)
+        ui.set_next_item_width(200)
+        mv_changed, mv_val = ui.slider_float(
+            "max visible trajs##nsmax",
+            float(self.newton_snap_max_visible_iters), 1.0, 10.0, "%.0f")
+        if mv_changed:
+            self.newton_snap_max_visible_iters = int(round(mv_val))
+            snap_prefs_dirty = True
+
+        ui.set_next_item_width(200)
+        am_changed, am_val = ui.slider_float(
+            "oldest iter opacity##nsalpha",
+            float(self.newton_snap_iter_alpha_min), 0.0, 1.0, "%.2f")
+        if am_changed:
+            self.newton_snap_iter_alpha_min = float(am_val)
+            snap_prefs_dirty = True
+
+        try:
+            pal_idx = self.newton_snap_palette_options.index(self.newton_snap_palette)
+        except ValueError:
+            pal_idx = 0
+        changed_p, pal_idx = ui.combo(
+            "traj color##nspal", pal_idx, self.newton_snap_palette_options)
+        if changed_p:
+            self.newton_snap_palette = self.newton_snap_palette_options[pal_idx]
+            snap_prefs_dirty = True
+
+        mesh_c, mesh_v = ui.checkbox(
+            "Show coarse mesh ghosts", self.newton_snap_show_meshes)
+        if mesh_c:
+            self.newton_snap_show_meshes = bool(mesh_v)
+            snap_prefs_dirty = True
+        skel_c, skel_v = ui.checkbox(
+            "Show stick skeleton overlay", self.newton_snap_show_skeleton)
+        if skel_c:
+            self.newton_snap_show_skeleton = bool(skel_v)
+            snap_prefs_dirty = True
+        trail_c, trail_v = ui.checkbox(
+            "Show COM base trails", self.newton_snap_show_trails)
+        if trail_c:
+            self.newton_snap_show_trails = bool(trail_v)
+            snap_prefs_dirty = True
+
+        if snap_prefs_dirty:
+            self._save_newton_snap_prefs()
 
         if self.newton_snap_data is not None:
             ids = self.newton_snap_data.iter_ids
-            id_min, id_max = ids[0], ids[-1]
-            ui.set_next_item_width(200)
-            mi_changed, mi_val = ui.slider_int(
-                "show up to iter##nsmax",
-                int(self.newton_snap_max_iter_id), id_min, id_max)
-            if mi_changed:
-                # Snap slider to a loaded iter id (nearest ≤ value).
-                allowed = [i for i in ids if i <= mi_val]
-                self.newton_snap_max_iter_id = allowed[-1] if allowed else id_min
-
-            # Focus iter: index into loaded list for a clean combo.
-            focus_labels = [str(i) for i in ids]
-            try:
-                focus_idx = ids.index(self.newton_snap_focus_iter_id)
-            except ValueError:
-                focus_idx = len(ids) - 1
-            changed_f, focus_idx = ui.combo(
-                "Focus iter##nsfocus", focus_idx, focus_labels)
-            if changed_f:
-                self.newton_snap_focus_iter_id = ids[focus_idx]
-
+            scrub_i = self.newton_snap_data.scrub_index_clamped(
+                self.newton_snap_scrub_index)
+            visible = self.newton_snap_data.iters_visible_window(
+                self.newton_snap_scrub_index,
+                max_iters=int(self.newton_snap_max_visible_iters))
+            vis_ids = [it.iter_id for it in visible]
             ui.text_colored(
                 ui.ImVec4(0.7, 0.85, 1.0, 1.0),
-                f"{len(ids)} iters  T={self.newton_snap_data.min_duration:.3f}"
-                f"→{self.newton_snap_data.max_duration:.3f}s  "
-                f"align={self.newton_snap_align}")
+                f"visible iters: {vis_ids[0]}..{vis_ids[-1]}  "
+                f"({len(visible)}/{len(ids)} shown, scrub K={ids[scrub_i]})  "
+                f"pose Δt={self.newton_snap_resample_dt:.2f}s  "
+                f"oldest α={self.newton_snap_iter_alpha_min:.2f}")
+
+            # dt plot tracks the scrubber's current Newton iter.
+            self.newton_snap_focus_iter_id = ids[scrub_i]
 
             ui.separator()
-            ui.text("dt evolution (focus iter)")
+            ui.text("dt evolution (scrub iter)")
             newton_snap_utils.draw_dt_plot(
                 ui,
                 self.newton_snap_data,
                 focus_iter_id=int(self.newton_snap_focus_iter_id),
-                time_s=float(self.playback_time),
-                align=self.newton_snap_align,
-                height=110.0,
+                height=170.0,
             )
 
         ui.text_wrapped(self.newton_snap_status)
@@ -2589,8 +2687,11 @@ class Viewer:
         viewport = ui.get_main_viewport()
 
         lag = bool(getattr(self, "_playback_lag_warn", False))
+        snap_mode = bool(
+            self.newton_snap_active and self.newton_snap_data is not None
+            and self.newton_snap_data.iters)
         # Reserve bottom space so status lines are never clipped.
-        panel_height = 160 if lag else 120
+        panel_height = 160 if lag else (140 if snap_mode else 120)
         panel_width = viewport.size.x - 2 * (2 * _UI_NEWTON_PANEL_MARGIN + _UI_NEWTON_PANEL_WIDTH)
         margin = _UI_NEWTON_PANEL_MARGIN
 
@@ -2603,27 +2704,66 @@ class Viewer:
         ui.begin(
             "Playback Controls",
             flags=(ui.WindowFlags_.no_collapse | ui.WindowFlags_.no_resize))
-        # Scrub with slider; type precise values in the input (%.4f).
-        ui.align_text_to_frame_padding()
-        ui.text("Time (s):")
-        ui.same_line()
-        ui.set_next_item_width(max(80.0, panel_width - 320))
-        changed_s, new_time_s = ui.slider_float(
-            "##TimeSlider",
-            float(self.playback_time),
-            0.0,
-            max(self.playback_total_time, 1e-6),
-            "%.4f")
-        if changed_s:
-            self.playback_time = wp.clamp(new_time_s, 0.0, self.playback_total_time)
-        ui.same_line()
-        ui.set_next_item_width(110)
-        changed_i, new_time_i = ui.input_float(
-            "##TimeInput", float(self.playback_time), 0.01, 0.1, "%.4f")
-        if changed_i:
-            self.playback_time = wp.clamp(new_time_i, 0.0, self.playback_total_time)
-        ui.same_line()
-        ui.text_colored(ui.ImVec4(0.6, 0.8, 1.0, 1.0), f"/ {self.playback_total_time:.4f}s")
+        if snap_mode:
+            ids = self.newton_snap_data.iter_ids
+            scrub_max = float(max(0, len(ids) - 1))
+            scrub_i = self.newton_snap_data.scrub_index_clamped(
+                self.newton_snap_scrub_index)
+            ui.align_text_to_frame_padding()
+            ui.text("Newton iter:")
+            ui.same_line()
+            ui.set_next_item_width(max(80.0, panel_width - 360))
+            changed_s, new_idx = ui.slider_float(
+                "##NewtonIterSlider",
+                float(self.newton_snap_scrub_index),
+                0.0,
+                max(scrub_max, 1e-6),
+                "%.0f",
+            )
+            if changed_s:
+                self.newton_snap_scrub_index = float(np.clip(
+                    round(new_idx), 0.0, scrub_max))
+            ui.same_line()
+            ui.set_next_item_width(90)
+            changed_i, new_idx_i = ui.input_float(
+                "##NewtonIterInput",
+                float(self.newton_snap_scrub_index),
+                0.0, 0.0, "%.0f",
+            )
+            if changed_i:
+                self.newton_snap_scrub_index = float(np.clip(
+                    round(new_idx_i), 0.0, scrub_max))
+            ui.same_line()
+            ui.text_colored(
+                ui.ImVec4(0.6, 0.8, 1.0, 1.0),
+                f"= id {ids[scrub_i]}  ({scrub_i + 1}/{len(ids)})")
+            if self.to_playback_enabled and self.to_playback_data is not None:
+                ui.text_colored(
+                    ui.ImVec4(0.65, 0.75, 0.85, 1.0),
+                    f"TO playback time (separate): {self.playback_time:.3f}s / "
+                    f"{self.playback_total_time:.3f}s")
+        else:
+            # Scrub with slider; type precise values in the input (%.4f).
+            ui.align_text_to_frame_padding()
+            ui.text("Time (s):")
+            ui.same_line()
+            ui.set_next_item_width(max(80.0, panel_width - 320))
+            changed_s, new_time_s = ui.slider_float(
+                "##TimeSlider",
+                float(self.playback_time),
+                0.0,
+                max(self.playback_total_time, 1e-6),
+                "%.4f")
+            if changed_s:
+                self.playback_time = wp.clamp(new_time_s, 0.0, self.playback_total_time)
+            ui.same_line()
+            ui.set_next_item_width(110)
+            changed_i, new_time_i = ui.input_float(
+                "##TimeInput", float(self.playback_time), 0.01, 0.1, "%.4f")
+            if changed_i:
+                self.playback_time = wp.clamp(new_time_i, 0.0, self.playback_total_time)
+            ui.same_line()
+            ui.text_colored(ui.ImVec4(0.6, 0.8, 1.0, 1.0), f"/ {self.playback_total_time:.4f}s")
 
         self.is_playing = not ui.button("Pause") if self.is_playing else ui.button("Play ")
         ui.same_line()

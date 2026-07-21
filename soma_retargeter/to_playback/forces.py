@@ -900,6 +900,8 @@ def apply_studio_shape_materials(
                     0.0,
                 )
             elif bi < bodies_per and articulations >= 2 and alpha_ok:
+                # True alpha on origin; draw-order opaque→transparent split
+                # keeps it from writing depth over the solid TO robot.
                 m = _studio_material_from_base(base, checker=0.0)
                 mats[local_i] = newton_alpha.encode_material_alpha(m, origin_a)
             else:
@@ -991,10 +993,13 @@ def apply_to_playback_appearance(
         use_mesh_alpha=use_mesh_alpha,
     )
 
+    # Keep original mesh hues for both robots. Origin fade is true shader alpha
+    # (see apply_studio_shape_materials); do NOT dim colors — that made origin
+    # look solid-grey and TO look darker underneath.
     alpha_ok = use_mesh_alpha and newton_alpha.is_mesh_alpha_enabled()
     if (not alpha_ok) and articulations >= 2 and original_colors and hasattr(
             viewer, "update_shape_colors"):
-        # Fallback: pale ghost tint when alpha patch is unavailable.
+        # Fallback only when alpha patch is unavailable.
         ghost = 1.0 - float(np.clip(origin_opacity, 0.0, 1.0))
         colors = {}
         for si, bi in enumerate(shape_body):

@@ -299,32 +299,117 @@ def enable_studio_floor_alpha() -> bool:
 
 
 def enable_studio_draw_order() -> bool:
-    """Opaque floor, robots, then floor mirrors (depth off) on top."""
+    """Opaque floor + robots, then frosted ghosts, then frosted floor mirrors.
+
+    Translucent origin / snapshot ghosts / floor reflections use a depth
+    prepass + alpha color pass so only the outer shell is visible (internal
+    motors/ribs stay hidden). Opaque TO draws first so it is not darkened by
+    multi-layer origin blend.
+    """
     from newton._src.viewer.gl.opengl import RendererGL
 
-    if getattr(RendererGL._draw_objects, "_soma_draw_order_v4", False):
+    if getattr(RendererGL._draw_objects, "_soma_draw_order_v14", False):
         return True
 
+    _ensure_alpha_filter_shader()
+
+    def _set_alpha_filter(renderer, mode: int) -> None:
+        loc = getattr(getattr(renderer, "_shape_shader", None), "loc_soma_alpha_filter", None)
+        if loc is None or int(loc) < 0:
+            return
+        gl = RendererGL.gl
+        shader = renderer._shape_shader
+        shader.use()
+        gl.glUniform1i(loc, int(mode))
+
+    def _force_front_face_cull(objects):
+        saved = []
+        for o in objects:
+            mesh = getattr(o, "mesh", None)
+            if mesh is not None and hasattr(mesh, "backface_culling"):
+                saved.append((mesh, bool(mesh.backface_culling)))
+                mesh.backface_culling = True
+        return saved
+
+    def _restore_front_face_cull(saved):
+        for mesh, prev in saved:
+            mesh.backface_culling = prev
+
+    def _draw_frosted_shell(objects, *, front_face=None):
+        """Outer-surface transparency: hide internals, keep see-through shell.
+
+        ``front_face`` defaults to CCW; floor mirrors pass ``GL_CW`` because the
+        reflection matrix flips winding.
+        """
+        if not objects:
+            return
+        gl = RendererGL.gl
+        if front_face is None:
+            front_face = gl.GL_CCW
+        saved_cull = _force_front_face_cull(objects)
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glEnable(gl.GL_CULL_FACE)
+        gl.glCullFace(gl.GL_BACK)
+        gl.glFrontFace(front_face)
+
+        gl.glColorMask(False, False, False, False)
+        gl.glDepthMask(True)
+        gl.glDepthFunc(gl.GL_LESS)
+        gl.glDisable(gl.GL_BLEND)
+        for o in objects:
+            o.render()
+
+        gl.glColorMask(True, True, True, True)
+        gl.glDepthMask(False)
+        gl.glDepthFunc(gl.GL_LEQUAL)
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        for o in objects:
+            o.render()
+
+        _restore_front_face_cull(saved_cull)
+        gl.glFrontFace(gl.GL_CCW)
+        gl.glCullFace(gl.GL_BACK)
+        gl.glDepthFunc(gl.GL_LESS)
+        gl.glDepthMask(True)
+        gl.glDisable(gl.GL_BLEND)
+
     def _draw_reflect_pass(reflect):
+        """Floor mirrors: frosted outer shell (no internal motors in the puddle).
+
+        Reflections sit under the floor, so scene depth would hide them. Clear
+        depth for this pass only (reflect is drawn last), then reuse the same
+        shell prepass as origin/snapshot ghosts. Winding is CW after mirror.
+        """
         if not reflect:
             return
         gl = RendererGL.gl
-        gl.glDisable(gl.GL_DEPTH_TEST)
-        gl.glDepthMask(gl.GL_FALSE)
-        # Planar mirror reverses winding; flip front-face so the camera
-        # sees the underside (soles) instead of the same dorsum as above.
-        gl.glFrontFace(gl.GL_CW)
-        for o in reflect:
-            gl.glEnable(gl.GL_CULL_FACE)
+        gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
+        _draw_frosted_shell(reflect, front_face=gl.GL_CW)
+
+    def _draw_ghost_pass(ghost):
+        """Snapshot traj ghosts: frosted outer shell only."""
+        _draw_frosted_shell(ghost)
+
+    def _draw_rest_alpha_split(self, rest):
+        """Opaque TO first, then frosted translucent origin (no inner structure)."""
+        if not rest:
+            return
+        gl = RendererGL.gl
+        _set_alpha_filter(self, 1)
+        gl.glColorMask(True, True, True, True)
+        gl.glDepthMask(True)
+        gl.glDepthFunc(gl.GL_LESS)
+        gl.glDisable(gl.GL_BLEND)
+        for o in rest:
             o.render()
-        gl.glFrontFace(gl.GL_CCW)
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glEnable(gl.GL_DEPTH_TEST)
+        _set_alpha_filter(self, 2)
+        _draw_frosted_shell(rest)
+        _set_alpha_filter(self, 0)
 
     def _draw_objects_ordered(self, objects):
         gl = RendererGL.gl
 
-        # Skip mirrors in the shadow map pass (would cast false shadows).
         is_shadow = False
         try:
             bound = gl.GLint()
@@ -335,7 +420,7 @@ def enable_studio_draw_order() -> bool:
         except Exception:
             is_shadow = False
 
-        reflect, floor, rest = [], [], []
+        reflect, floor, ghost, rest = [], [], [], []
         for name, o in objects.items():
             if not hasattr(o, "render"):
                 continue
@@ -345,33 +430,121 @@ def enable_studio_draw_order() -> bool:
                     pass_id = "reflect"
                 elif name.startswith("/to_playback/floor_catcher"):
                     continue
+                elif name.startswith("/newton_snap/mesh/") and name.endswith("/ghost"):
+                    pass_id = "ghost"
             if pass_id == "reflect":
                 if not is_shadow:
                     reflect.append(o)
+            elif pass_id == "ghost":
+                if not is_shadow:
+                    ghost.append(o)
             elif pass_id == "floor":
                 floor.append(o)
             else:
                 rest.append(o)
 
         if is_shadow:
+            _set_alpha_filter(self, 1)
             for o in floor:
                 o.render()
             for o in rest:
                 o.render()
+            _set_alpha_filter(self, 0)
             return
 
         for o in floor:
             o.render()
-        for o in rest:
-            o.render()
-        # Draw mirrors after solid robots so opaque TO shells do not paint over
-        # their own floor footprints. Depth off keeps them composited on floor.
+        _draw_rest_alpha_split(self, rest)
+        _draw_ghost_pass(ghost)
         _draw_reflect_pass(reflect)
 
+    _draw_objects_ordered._soma_draw_order_v14 = True
+    _draw_objects_ordered._soma_draw_order_v13 = True
+    _draw_objects_ordered._soma_draw_order_v12 = True
+    _draw_objects_ordered._soma_draw_order_v11 = True
+    _draw_objects_ordered._soma_draw_order_v10 = True
+    _draw_objects_ordered._soma_draw_order_v9 = True
+    _draw_objects_ordered._soma_draw_order_v8 = True
+    _draw_objects_ordered._soma_draw_order_v7 = True
+    _draw_objects_ordered._soma_draw_order_v6 = True
+    _draw_objects_ordered._soma_draw_order_v5 = True
     _draw_objects_ordered._soma_draw_order_v4 = True
     _draw_objects_ordered._soma_draw_order = True
     RendererGL._draw_objects = _draw_objects_ordered
     return True
+
+
+def _ensure_alpha_filter_shader() -> bool:
+    """Add soma_alpha_filter uniform + discard so opaque/transparent can be split."""
+    import newton._src.viewer.gl.shaders as shaders
+    from newton._src.viewer.gl.shaders import ShaderShape
+
+    marker = "SOMA_ALPHA_FILTER_V1"
+    frag = shaders.shape_fragment_shader
+    if marker not in frag:
+        # Require mesh-alpha soma_alpha variable.
+        needle = "float soma_alpha = (Material.z < 0.0) ? clamp(-Material.z, 0.0, 1.0) : 1.0;"
+        if needle not in frag:
+            # Try multiline form from enable_mesh_alpha.
+            needle = (
+                "    float soma_alpha = (Material.z < 0.0) "
+                "? clamp(-Material.z, 0.0, 1.0) : 1.0;"
+            )
+        if needle not in frag:
+            return False
+        insert = (
+            f"\n    // {marker}: 0=all, 1=opaque-only, 2=transparent-only\n"
+            "    if (soma_alpha_filter == 1 && soma_alpha < 0.995) discard;\n"
+            "    if (soma_alpha_filter == 2 && soma_alpha >= 0.995) discard;"
+        )
+        # Declare uniform near other uniforms if missing.
+        if "uniform int soma_alpha_filter;" not in frag:
+            frag = frag.replace(
+                "uniform float shadow_extents;",
+                "uniform float shadow_extents;\n"
+                f"uniform int soma_alpha_filter; // {marker}",
+            )
+            if "uniform int soma_alpha_filter;" not in frag:
+                # Fallback: inject after first uniform block line in fragment.
+                frag = frag.replace(
+                    "#version 330 core\n",
+                    "#version 330 core\n"
+                    f"uniform int soma_alpha_filter; // {marker}\n",
+                    1,
+                )
+        frag = frag.replace(needle, needle + insert)
+        shaders.shape_fragment_shader = frag
+
+    # Ensure ShaderShape caches the uniform location.
+    if not getattr(ShaderShape.__init__, "_soma_alpha_filter_patched", False):
+        _orig_init = ShaderShape.__init__
+
+        def _init_with_filter(self, gl):
+            _orig_init(self, gl)
+            try:
+                with self:
+                    self.loc_soma_alpha_filter = self._get_uniform_location("soma_alpha_filter")
+                    if self.loc_soma_alpha_filter is not None and int(self.loc_soma_alpha_filter) >= 0:
+                        gl.glUniform1i(self.loc_soma_alpha_filter, 0)
+            except Exception:
+                self.loc_soma_alpha_filter = -1
+
+        _init_with_filter._soma_alpha_filter_patched = True
+        ShaderShape.__init__ = _init_with_filter
+
+    # Refresh any live RendererGL shape shaders so the new uniform exists.
+    try:
+        from newton._src.viewer.gl.opengl import RendererGL
+        import gc
+        for obj in gc.get_objects():
+            if isinstance(obj, RendererGL) and getattr(obj, "_shape_shader", None) is not None:
+                try:
+                    obj._shape_shader = ShaderShape(RendererGL.gl)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return marker in shaders.shape_fragment_shader or True
 
 
 def enable_studio_sky_gradient() -> bool:
