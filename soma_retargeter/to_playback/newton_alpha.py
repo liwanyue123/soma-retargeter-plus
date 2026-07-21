@@ -299,11 +299,27 @@ def enable_studio_floor_alpha() -> bool:
 
 
 def enable_studio_draw_order() -> bool:
-    """Opaque floor, then robot mirrors (depth off), then robots."""
+    """Opaque floor, robots, then floor mirrors (depth off) on top."""
     from newton._src.viewer.gl.opengl import RendererGL
 
-    if getattr(RendererGL._draw_objects, "_soma_draw_order_v3", False):
+    if getattr(RendererGL._draw_objects, "_soma_draw_order_v4", False):
         return True
+
+    def _draw_reflect_pass(reflect):
+        if not reflect:
+            return
+        gl = RendererGL.gl
+        gl.glDisable(gl.GL_DEPTH_TEST)
+        gl.glDepthMask(gl.GL_FALSE)
+        # Planar mirror reverses winding; flip front-face so the camera
+        # sees the underside (soles) instead of the same dorsum as above.
+        gl.glFrontFace(gl.GL_CW)
+        for o in reflect:
+            gl.glEnable(gl.GL_CULL_FACE)
+            o.render()
+        gl.glFrontFace(gl.GL_CCW)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glEnable(gl.GL_DEPTH_TEST)
 
     def _draw_objects_ordered(self, objects):
         gl = RendererGL.gl
@@ -337,11 +353,6 @@ def enable_studio_draw_order() -> bool:
             else:
                 rest.append(o)
 
-        # If floor was never tagged, keep mirrors above other geometry by
-        # drawing them last among non-robot... still need floor first.
-        # Fallback: draw mirrors after EVERYTHING with depth off so they at
-        # least composite over the floor pixels (robots will have overwritten
-        # their own footprints — acceptable).
         if is_shadow:
             for o in floor:
                 o.render()
@@ -349,41 +360,15 @@ def enable_studio_draw_order() -> bool:
                 o.render()
             return
 
-        if floor:
-            for o in floor:
-                o.render()
-            if reflect:
-                gl.glDisable(gl.GL_DEPTH_TEST)
-                gl.glDepthMask(gl.GL_FALSE)
-                # Planar mirror reverses winding; flip front-face so the camera
-                # sees the underside (soles) instead of the same dorsum as above.
-                gl.glFrontFace(gl.GL_CW)
-                for o in reflect:
-                    gl.glEnable(gl.GL_CULL_FACE)
-                    o.render()
-                gl.glFrontFace(gl.GL_CCW)
-                gl.glDepthMask(gl.GL_TRUE)
-                gl.glEnable(gl.GL_DEPTH_TEST)
-            for o in rest:
-                o.render()
-        else:
-            # Floor tag missing — draw scene then mirrors on top (depth off).
-            for o in rest:
-                o.render()
-            if reflect:
-                gl.glDisable(gl.GL_DEPTH_TEST)
-                gl.glDepthMask(gl.GL_FALSE)
-                # Planar mirror reverses winding; flip front-face so the camera
-                # sees the underside (soles) instead of the same dorsum as above.
-                gl.glFrontFace(gl.GL_CW)
-                for o in reflect:
-                    gl.glEnable(gl.GL_CULL_FACE)
-                    o.render()
-                gl.glFrontFace(gl.GL_CCW)
-                gl.glDepthMask(gl.GL_TRUE)
-                gl.glEnable(gl.GL_DEPTH_TEST)
+        for o in floor:
+            o.render()
+        for o in rest:
+            o.render()
+        # Draw mirrors after solid robots so opaque TO shells do not paint over
+        # their own floor footprints. Depth off keeps them composited on floor.
+        _draw_reflect_pass(reflect)
 
-    _draw_objects_ordered._soma_draw_order_v3 = True
+    _draw_objects_ordered._soma_draw_order_v4 = True
     _draw_objects_ordered._soma_draw_order = True
     RendererGL._draw_objects = _draw_objects_ordered
     return True
@@ -660,7 +645,7 @@ def enable_studio_reflect_fade() -> bool:
     import re
     import newton._src.viewer.gl.shaders as shaders
 
-    marker = "SOMA_REFLECT_FADE_V2"
+    marker = "SOMA_REFLECT_FADE_V3"
     frag = shaders.shape_fragment_shader
     if marker in frag:
         return True
@@ -669,10 +654,10 @@ def enable_studio_reflect_fade() -> bool:
         f"    // {marker}: contact-sharp reflection, never fully opaque\n"
         "    if (metallic > 0.04 && metallic < 0.06 && Material.z < 0.0) {\n"
         "        float dist_plane = abs(FragPos.z);\n"
-        "        float contact = 1.0 - smoothstep(0.05, 1.05, dist_plane);\n"
-        "        soma_alpha *= mix(0.08, 0.50, contact);\n"
-        "        color *= mix(0.62, 0.88, contact);\n"
-        "        color = mix(color, pow(fogColor, vec3(2.2)), (1.0 - contact) * 0.68);\n"
+        "        float contact = 1.0 - smoothstep(0.04, 1.35, dist_plane);\n"
+        "        soma_alpha *= mix(0.16, 0.58, contact);\n"
+        "        color *= mix(0.68, 0.92, contact);\n"
+        "        color = mix(color, pow(fogColor, vec3(2.2)), (1.0 - contact) * 0.45);\n"
         "    }\n"
         "\n"
         "    // gamma correction (sRGB)\n"

@@ -230,6 +230,7 @@ class Viewer:
         # Multiplier on default shaft/head radii (1 = stock thickness).
         self.to_playback_force_thickness = 1.0
         self._load_to_playback_force_prefs()
+        self._studio_look_palette = self._load_studio_look_prefs()
         self.to_playback_show_forces = True
         # Real alpha when newton_alpha patch is active. Fixed ghost opacity
         # (no UI): keep modest so coincident overlay does not mottle the TO shell.
@@ -243,7 +244,7 @@ class Viewer:
         self._to_original_shape_colors = None
         self._to_original_shape_materials = None
         if self.to_playback_requested and self.num_robots >= 2:
-            to_force_utils.apply_studio_environment(self.viewer)
+            self._apply_studio_look()
             (self._to_original_shape_colors,
              self._to_original_shape_materials) = to_force_utils.apply_to_playback_appearance(
                 self.viewer, self.model,
@@ -269,6 +270,9 @@ class Viewer:
 
     def _to_playback_force_prefs_path(self):
         return io_utils.get_project_root() / ".soma_to_playback_force_prefs.json"
+
+    def _studio_look_prefs_path(self):
+        return io_utils.get_project_root() / ".soma_studio_look_prefs.json"
 
     def _load_to_playback_force_prefs(self):
         path = self._to_playback_force_prefs_path()
@@ -298,6 +302,65 @@ class Viewer:
             path.write_text(json.dumps(data, indent=2) + "\n")
         except Exception as exc:
             print(f"[WARN]: Failed to save TO force prefs [{path}]: {exc}")
+
+    def _load_studio_look_prefs(self):
+        """Load saved Light/Sky/Ground palette (RGB 0–1), or None."""
+        path = self._studio_look_prefs_path()
+        if not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text())
+        except Exception as exc:
+            print(f"[WARN]: Failed to load studio look prefs [{path}]: {exc}")
+            return None
+        try:
+            return {
+                "light": to_force_utils._as_rgb01(data["light_rgb255"]),
+                "sky": to_force_utils._as_rgb01(data["sky_rgb255"]),
+                "ground": to_force_utils._as_rgb01(data["ground_rgb255"]),
+            }
+        except Exception as exc:
+            print(f"[WARN]: Invalid studio look prefs [{path}]: {exc}")
+            return None
+
+    def _save_studio_look_prefs_from_viewer(self) -> bool:
+        """Persist current Newton Light/Sky/Ground to local prefs."""
+        env = to_force_utils.get_studio_environment(self.viewer)
+        if env is None:
+            return False
+        path = self._studio_look_prefs_path()
+        data = {
+            "_comment": "Persisted Newton studio Light / Sky / Ground colors "
+                        "(RGB 0–255). Applied on TO playback startup / Reset.",
+            "light_rgb255": list(to_force_utils.rgb01_to_255(env["light"])),
+            "sky_rgb255": list(to_force_utils.rgb01_to_255(env["sky"])),
+            "ground_rgb255": list(to_force_utils.rgb01_to_255(env["ground"])),
+        }
+        try:
+            path.write_text(json.dumps(data, indent=2) + "\n")
+        except Exception as exc:
+            print(f"[WARN]: Failed to save studio look prefs [{path}]: {exc}")
+            return False
+        self._studio_look_palette = {
+            "light": env["light"],
+            "sky": env["sky"],
+            "ground": env["ground"],
+        }
+        return True
+
+    def _clear_studio_look_prefs(self):
+        path = self._studio_look_prefs_path()
+        try:
+            if path.is_file():
+                path.unlink()
+        except Exception as exc:
+            print(f"[WARN]: Failed to clear studio look prefs [{path}]: {exc}")
+        self._studio_look_palette = None
+
+    def _apply_studio_look(self):
+        """Apply studio knobs + saved (or default) Light/Sky/Ground palette."""
+        to_force_utils.apply_studio_environment(
+            self.viewer, palette=self._studio_look_palette)
 
     def _init_scene_objects(self):
         """State for user-placed scene primitives (boxes, etc.)."""
@@ -940,7 +1003,7 @@ class Viewer:
         if self.num_robots < 2:
             return
         self.robot_offsets = to_force_utils.default_layout_offsets(self.to_playback_layout)
-        to_force_utils.apply_studio_environment(self.viewer)
+        self._apply_studio_look()
         opacity = (
             float(self.to_playback_origin_opacity)
             if self.to_playback_show_origin else 0.0)
@@ -1283,6 +1346,12 @@ class Viewer:
         self._render_to_playback_terrain()
 
         self.viewer.log_state(self.state)
+        if self.to_playback_requested and self.num_robots >= 2:
+            to_force_utils.sync_studio_ground_tint(
+                self.viewer,
+                self.model,
+                original_colors=self._to_original_shape_colors,
+            )
         if self.to_playback_enabled:
             to_force_utils.draw_floor_reflections(self.viewer, self.model)
         self._render_to_playback_forces()
@@ -1697,11 +1766,21 @@ class Viewer:
         ui.text_disabled(
             "Shaft/head radius multiplier (1 = default). Prefs auto-saved.")
 
+        if ui.button("Save studio look##toplayenvsave"):
+            if self._save_studio_look_prefs_from_viewer():
+                self.to_playback_status = (
+                    "Saved studio Light/Sky/Ground → .soma_studio_look_prefs.json")
+            else:
+                self.to_playback_status = "Save studio look failed (no renderer)."
+        ui.same_line()
         if ui.button("Reset studio look##toplayenv"):
-            to_force_utils.apply_studio_environment(self.viewer)
+            self._clear_studio_look_prefs()
+            self._apply_studio_look()
             self._apply_to_playback_layout()
+            self.to_playback_status = "Reset studio look to built-in defaults."
         ui.text_disabled(
-            "Studio: soft gray void, ~1m floor grid, horizon fog (no tex needed).")
+            "Save keeps Newton Light/Sky/Ground after restart. "
+            "Reset restores coded defaults. Specular/shadows are not saved.")
 
         if self.to_playback_data is not None:
             d = self.to_playback_data
@@ -2711,10 +2790,22 @@ def main():
         default=None,
         help="Optional CIO history run folder to auto-load when "
              "--to-playback is set.")
+    parser.add_argument(
+        "--snapshots",
+        action="store_true",
+        help="Auto-load Newton iteration snapshots. With --to-run-dir (or "
+             "config to_run_dir), uses <run-dir>/newton_snapshots.")
+    parser.add_argument(
+        "--snapshots-dir",
+        type=str,
+        default=None,
+        help="Explicit Newton snapshots folder (newton_iter_K.txt + _dt.txt). "
+             "Overrides --snapshots auto path.")
 
     # Peek flags before ViewerGL constructs its shaders so we can patch alpha.
     import sys
-    if "--to-playback" in sys.argv or "--to-run-dir" in sys.argv:
+    if any(x in sys.argv for x in (
+            "--to-playback", "--to-run-dir", "--snapshots", "--snapshots-dir")):
         from soma_retargeter.to_playback.newton_alpha import (
             enable_mesh_alpha,
             enable_soft_shadow_bias,
@@ -2759,6 +2850,17 @@ def main():
         config["to_run_dir"] = args.to_run_dir
         config["to_playback"] = True
         print(f"[INFO]: --to-run-dir = {args.to_run_dir}")
+    if args.snapshots_dir:
+        config["newton_snap_dir"] = args.snapshots_dir
+        print(f"[INFO]: --snapshots-dir = {args.snapshots_dir}")
+    elif args.snapshots:
+        run_dir = args.to_run_dir or config.get("to_run_dir")
+        if not run_dir:
+            print("[WARN]: --snapshots needs --to-run-dir or config to_run_dir")
+        else:
+            snap_dir = pathlib.Path(run_dir).expanduser().resolve() / "newton_snapshots"
+            config["newton_snap_dir"] = str(snap_dir)
+            print(f"[INFO]: --snapshots → {snap_dir}")
     if args.data:
         print(f"[INFO]: --data override: retarget_source = '{args.data}'")
         config['retarget_source'] = args.data

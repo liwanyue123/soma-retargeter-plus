@@ -472,17 +472,16 @@ def draw_dt_plot(ui, data: NewtonSnapshotsData, *, focus_iter_id: int, time_s: f
     ui.text(f"iter {focus_iter_id}  dt[{seg}]={dts[seg]:.4f}s  "
             f"mean={dts.mean():.4f}  T={it.duration:.3f}s")
 
-    values = dts.tolist()
     if hasattr(ui, "plot_lines"):
         ui.plot_lines(
             "##ns_dt_plot",
-            values,
+            dts,
             graph_size=ui.ImVec2(-1, height),
         )
     elif hasattr(ui, "plot_histogram"):
         ui.plot_histogram(
             "##ns_dt_plot",
-            values,
+            dts,
             graph_size=ui.ImVec2(-1, height),
         )
     else:

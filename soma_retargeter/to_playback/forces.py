@@ -193,22 +193,22 @@ def _reflect_mat44_batch(m: np.ndarray) -> np.ndarray:
     return np.matmul(m, _REFLECT_PLANE)
 
 
-_REFLECT_ALPHA_MAX = 0.44
-_REFLECT_ALPHA_MIN = 0.08
+_REFLECT_ALPHA_MAX = 0.52
+_REFLECT_ALPHA_MIN = 0.16
 
 
 def _reflect_alpha_for_height(z: float) -> tuple[float, float]:
     """Return (alpha, roughness) for a mirror instance at world height ``z``.
 
-    Near the floor (feet) → sharper/brighter; head height → softer/faded.
-    Even at contact, alpha stays below 1 so reflections never read as solid white.
+    Near the floor (feet) → sharper/brighter; head height → softer but still
+    readable (full-body silhouette, not just toes).
     """
     h = float(max(z, 0.0))
-    t = float(np.clip((h - 0.06) / 1.05, 0.0, 1.0))
+    t = float(np.clip((h - 0.04) / 1.35, 0.0, 1.0))
     # smoothstep-ish without importing extra
     t = t * t * (3.0 - 2.0 * t)
     alpha = (_REFLECT_ALPHA_MAX - _REFLECT_ALPHA_MIN) * (1.0 - t) + _REFLECT_ALPHA_MIN
-    rough = 0.22 + 0.62 * t
+    rough = 0.18 + 0.55 * t
     return alpha, rough
 
 
@@ -307,19 +307,6 @@ def draw_floor_reflections(viewer, model) -> None:
     if not batches:
         return
 
-    horiz = []
-    for shapes, _m, x_np in batches:
-        if x_np is None or int(shapes.geo_type) not in mesh_types:
-            continue
-        model_shapes = np.asarray(shapes.model_shapes, dtype=np.int32)
-        for i in range(len(x_np)):
-            s_idx = int(model_shapes[i]) if i < len(model_shapes) else -1
-            if s_idx < 0 or s_idx >= len(shape_body) or int(shape_body[s_idx]) < 0:
-                continue
-            if float(x_np[i, 2]) > 0.25:
-                horiz.append(float(np.linalg.norm(x_np[i, 0:2])))
-    robots_away = bool(horiz) and float(np.median(horiz)) > 0.45
-
     mirrored = 0
     for shapes, m_np, x_np in batches:
         if int(shapes.geo_type) == int(nt.GeoType.PLANE):
@@ -348,12 +335,12 @@ def draw_floor_reflections(viewer, model) -> None:
                 continue
             if int(shape_body[s_idx]) < 0:
                 continue
-            # Only skip clearly subterranean mesh (penetration / debris).
-            # Do NOT cull near z=0: planted feet sit around 0–5 cm and must
-            # still appear in the floor mirror.
-            if float(x_np[i, 2]) < -0.02:
-                continue
-            if robots_away and float(np.linalg.norm(x_np[i, 0:2])) < 0.25:
+            # Skip only clearly buried meshes (deep penetration). Feet planted
+            # at ~0–8 cm must still mirror; do not xy-cull — overlay dual-robot
+            # with mismatched origin/TO poses was dropping the whole torso and
+            # leaving stray extended limbs when median(xy) > 0.45.
+            z_world = float(x_np[i, 2])
+            if z_world < -0.12:
                 continue
             keep.append(i)
 
@@ -602,8 +589,8 @@ def _rgb255(r: int, g: int, b: int) -> Tuple[float, float, float]:
 
 _STUDIO_LIGHT = _rgb255(226, 197, 141)
 # Newton UI "Sky Color" → sky_upper (zenith).  "Ground Color" → sky_lower (fog/horizon).
-_STUDIO_SKY_UPPER = _rgb255(52, 42, 42)
-_STUDIO_GROUND = _rgb255(149, 149, 149)
+_STUDIO_SKY_UPPER = _rgb255(28, 24, 22)
+_STUDIO_GROUND = _rgb255(58, 54, 50)
 _STUDIO_SKY_LOWER = _STUDIO_GROUND
 _GHOST_TINT = (0.78, 0.80, 0.82)
 _STUDIO_ROUGHNESS = 0.78
@@ -617,6 +604,92 @@ _STUDIO_SHADOW_RADIUS = 16.0
 _STUDIO_SHADOW_EXTENTS = 8.0
 _STUDIO_GROUND_GRID = 2.0
 _STUDIO_SUN_Z_UP = (0.12, -0.18, 0.98)
+
+
+def _as_rgb01(rgb: Sequence[float]) -> Tuple[float, float, float]:
+    r, g, b = (float(rgb[0]), float(rgb[1]), float(rgb[2]))
+    # Accept either 0–1 or 0–255 payloads from prefs / UI.
+    if max(r, g, b) > 1.0 + 1e-6:
+        r, g, b = r / 255.0, g / 255.0, b / 255.0
+    return (
+        float(np.clip(r, 0.0, 1.0)),
+        float(np.clip(g, 0.0, 1.0)),
+        float(np.clip(b, 0.0, 1.0)),
+    )
+
+
+def rgb01_to_255(rgb: Sequence[float]) -> Tuple[int, int, int]:
+    r, g, b = _as_rgb01(rgb)
+    return (int(round(r * 255)), int(round(g * 255)), int(round(b * 255)))
+
+
+def default_studio_palette() -> dict:
+    """Built-in studio Light / Sky / Ground (RGB 0–1)."""
+    return {
+        "light": _STUDIO_LIGHT,
+        "sky": _STUDIO_SKY_UPPER,
+        "ground": _STUDIO_SKY_LOWER,
+    }
+
+
+def get_studio_environment(viewer) -> dict | None:
+    """Read current Newton Light / Sky / Ground colors (RGB 0–1)."""
+    renderer = getattr(viewer, "renderer", None)
+    if renderer is None:
+        return None
+    light = getattr(renderer, "_light_color", _STUDIO_LIGHT)
+    sky = getattr(renderer, "sky_upper", _STUDIO_SKY_UPPER)
+    ground = getattr(renderer, "sky_lower", _STUDIO_SKY_LOWER)
+    return {
+        "light": _as_rgb01(light),
+        "sky": _as_rgb01(sky),
+        "ground": _as_rgb01(ground),
+    }
+
+
+def ground_color_for_viewer(viewer) -> Tuple[float, float, float]:
+    """Floor tint: prefer live Ground Color, else studio default."""
+    env = get_studio_environment(viewer)
+    if env is not None:
+        return env["ground"]
+    return _STUDIO_GROUND
+
+
+def sync_studio_ground_tint(
+    viewer,
+    model,
+    *,
+    original_colors: dict | None = None,
+    tint_ground: bool = True,
+) -> bool:
+    """Mirror live Newton Ground Color onto floor shape tints.
+
+    Newton's UI edits ``renderer.sky_lower`` immediately for fog/sky, but the
+    floor plane mesh keeps its last ``update_shape_colors`` until we push again.
+    """
+    if not tint_ground or not hasattr(viewer, "update_shape_colors"):
+        return False
+    floor_rgb = ground_color_for_viewer(viewer)
+    prev = getattr(viewer, "_soma_studio_ground_rgb", None)
+    if prev is not None:
+        if (abs(prev[0] - floor_rgb[0]) < 1e-4
+                and abs(prev[1] - floor_rgb[1]) < 1e-4
+                and abs(prev[2] - floor_rgb[2]) < 1e-4):
+            return False
+    viewer._soma_studio_ground_rgb = floor_rgb
+
+    shape_body = model.shape_body.numpy()
+    ground_colors = {}
+    for si, bi in enumerate(shape_body):
+        if int(bi) >= 0:
+            continue
+        if original_colors is not None and si not in original_colors:
+            continue
+        ground_colors[int(si)] = floor_rgb
+    if not ground_colors:
+        return False
+    viewer.update_shape_colors(ground_colors)
+    return True
 
 
 def _lerp_rgb(
@@ -713,19 +786,40 @@ def update_studio_grid_origin_from_state(
     set_studio_grid_origin(viewer, robot_root_xy(state, model, robot_index))
 
 
-def apply_studio_environment(viewer) -> None:
-    """Push Newton GL toward a dark matte studio look (soft key, low specular)."""
+def apply_studio_environment(
+    viewer,
+    *,
+    light: Sequence[float] | None = None,
+    sky: Sequence[float] | None = None,
+    ground: Sequence[float] | None = None,
+    palette: dict | None = None,
+) -> None:
+    """Push Newton GL toward a dark matte studio look (soft key, low specular).
+
+    Optional ``light`` / ``sky`` / ``ground`` (or a ``palette`` dict) override the
+    built-in RGB; values may be 0–1 or 0–255. Non-color studio knobs
+    (specular, shadows, sun) always use the coded defaults.
+    """
     renderer = getattr(viewer, "renderer", None)
     if renderer is None:
         return
+    defaults = default_studio_palette()
+    if palette:
+        light = light if light is not None else palette.get("light")
+        sky = sky if sky is not None else palette.get("sky")
+        ground = ground if ground is not None else palette.get("ground")
+    light_rgb = _as_rgb01(light if light is not None else defaults["light"])
+    sky_rgb = _as_rgb01(sky if sky is not None else defaults["sky"])
+    ground_rgb = _as_rgb01(ground if ground is not None else defaults["ground"])
+
     renderer.draw_sky = True
     if hasattr(renderer, "draw_shadows"):
         renderer.draw_shadows = True
-    renderer.sky_upper = _STUDIO_SKY_UPPER
-    renderer.sky_lower = _STUDIO_SKY_LOWER
-    renderer.background_color = _STUDIO_SKY_UPPER
+    renderer.sky_upper = sky_rgb
+    renderer.sky_lower = ground_rgb
+    renderer.background_color = sky_rgb
     if hasattr(renderer, "_light_color"):
-        renderer._light_color = _STUDIO_LIGHT
+        renderer._light_color = light_rgb
     if hasattr(renderer, "specular_scale"):
         renderer.specular_scale = _STUDIO_SPECULAR
     if hasattr(renderer, "diffuse_scale"):
@@ -752,6 +846,7 @@ def apply_studio_environment(viewer) -> None:
         newton_alpha.enable_soft_shadow_bias()
     except Exception:
         pass
+    viewer._soma_studio_ground_rgb = ground_rgb
 
 
 def _studio_material_from_base(
@@ -866,15 +961,18 @@ def apply_to_playback_appearance(
     bodies_per = model.body_count // articulations
 
     # Dark floor base color (grid lines drawn by isaac-grid shader patch).
+    # Prefer live Newton "Ground Color" so Save/Reset stay in sync with the floor.
+    floor_rgb = ground_color_for_viewer(viewer)
     if tint_ground and original_colors and hasattr(viewer, "update_shape_colors"):
         ground_colors = {}
         for si, bi in enumerate(shape_body):
             if bi < 0 and si in original_colors:
-                ground_colors[si] = _STUDIO_GROUND
+                ground_colors[si] = floor_rgb
             elif si in original_colors:
                 ground_colors[si] = original_colors[si]
         if ground_colors:
             viewer.update_shape_colors(ground_colors)
+        viewer._soma_studio_ground_rgb = floor_rgb
     elif original_colors and hasattr(viewer, "update_shape_colors"):
         ground_colors = {}
         for si, bi in enumerate(shape_body):
@@ -904,7 +1002,7 @@ def apply_to_playback_appearance(
                 continue
             base = original_colors[si]
             if bi < 0:
-                colors[si] = _STUDIO_GROUND if tint_ground else base
+                colors[si] = floor_rgb if tint_ground else base
             elif bi < bodies_per:
                 colors[si] = _lerp_rgb(base, _GHOST_TINT, ghost)
             else:
