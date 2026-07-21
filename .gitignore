@@ -24,3 +24,6 @@ assets/motions/test-export*/
 /tmp/
 
 selected_sonic
+
+# Local high-poly PM01 conversion (~1GB OBJs); not for git.
+/serial_pm01/

@@ -13,6 +13,13 @@ from soma_retargeter.to_playback.loader import (
     load_history_run,
     load_terrain_boxes,
 )
+from soma_retargeter.to_playback.newton_snapshots import (
+    NewtonSnapshotsData,
+    clear_snapshot_overlays,
+    draw_dt_plot,
+    draw_snapshot_overlays,
+    load_newton_snapshots,
+)
 from soma_retargeter.to_playback.robots import (
     TO_PLAYBACK_ROBOTS,
     get_to_robot_spec,
@@ -23,6 +30,11 @@ __all__ = [
     "ToPlaybackData",
     "load_history_run",
     "load_terrain_boxes",
+    "NewtonSnapshotsData",
+    "load_newton_snapshots",
+    "draw_snapshot_overlays",
+    "clear_snapshot_overlays",
+    "draw_dt_plot",
     "TO_PLAYBACK_ROBOTS",
     "get_to_robot_spec",
     "list_to_robot_keys",

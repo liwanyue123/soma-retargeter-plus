@@ -20,6 +20,7 @@ import soma_retargeter.pipelines.utils as pipeline_utils
 import soma_retargeter.robotics.calibration as calibration_utils
 import soma_retargeter.to_playback as to_playback
 from soma_retargeter.to_playback import forces as to_force_utils
+from soma_retargeter.to_playback import newton_snapshots as newton_snap_utils
 
 from soma_retargeter.renderers.skeleton_renderer import SkeletonRenderer
 from soma_retargeter.renderers.mesh_renderer import SkeletalMeshRenderer
@@ -87,6 +88,12 @@ class Viewer:
         self.playback_speed      = 1.0
         self.playback_loop       = True
         self.playback_total_time = 0.0
+        # Wall-clock timeline: Speed is realtime multiplier (independent of draw fps).
+        self._playback_clock_t0 = None
+        self._playback_wall_ema = None
+        self._playback_lag_warn = False  # low draw fps (choppy), not wrong Speed
+        self._playback_effective_speed = 1.0
+        self._playback_draw_fps = 0.0
 
         self.retarget_source_options = ['soma', 'mydata', 'mydata2', 'mydata3', 'mydata4', 'lafan1']
         if self.source_str not in self.retarget_source_options:
@@ -149,6 +156,7 @@ class Viewer:
             for i in range(self.num_robots)]
         self._build_viewer_robot_model()
         self._init_to_playback()
+        self._init_newton_snapshots()
 
         self.coordinate_renderer = CoordinateRenderer()
         self.show_ik_map_axes = False
@@ -191,6 +199,13 @@ class Viewer:
                 self.load_to_playback_run(auto_run)
             except Exception as exc:
                 print(f"[WARN]: Failed to auto-load TO run '{auto_run}': {exc}")
+
+        auto_ns = self.config.get("newton_snap_dir")
+        if auto_ns:
+            try:
+                self.load_newton_snapshots_folder(str(auto_ns))
+            except Exception as exc:
+                print(f"[WARN]: Failed to auto-load Newton snapshots '{auto_ns}': {exc}")
 
     def _init_to_playback(self):
         """State for the TO Playback panel (CIO history runs)."""
@@ -235,6 +250,22 @@ class Viewer:
                 origin_opacity=self.to_playback_origin_opacity)
             self.robot_offsets = to_force_utils.default_layout_offsets(
                 self.to_playback_layout)
+
+    def _init_newton_snapshots(self):
+        """State for Newton-iteration snapshot overlay panel."""
+        self.newton_snap_data = None
+        self.newton_snap_status = (
+            "Select a newton_snapshots folder (newton_iter_K.txt + _dt.txt).")
+        self.newton_snap_dir = str(self.config.get("newton_snap_dir") or "")
+        self.newton_snap_align = "absolute"  # or "normalized"
+        self.newton_snap_align_options = ["absolute", "normalized"]
+        self.newton_snap_resample_dt = 0.1
+        self.newton_snap_max_iter_id = 0
+        self.newton_snap_focus_iter_id = 0
+        self.newton_snap_show_trails = True
+        self.newton_snap_show_poses = True
+        self.newton_snap_drive_robot = True
+        self.newton_snap_active = False
 
     def _to_playback_force_prefs_path(self):
         return io_utils.get_project_root() / ".soma_to_playback_force_prefs.json"
@@ -1060,6 +1091,13 @@ class Viewer:
         self.compute_playback_total_time()
 
     def compute_playback_total_time(self):
+        # Newton snapshots own the scrubber when active (even alongside TO).
+        if self.newton_snap_active and self.newton_snap_data is not None:
+            self.playback_total_time = float(
+                self.newton_snap_data.timeline_duration(self.newton_snap_align))
+            self.playback_time = wp.clamp(self.playback_time, 0.0, self.playback_total_time)
+            return
+
         if self.to_playback_enabled and self.to_playback_data is not None:
             self.playback_total_time = float(self.to_playback_data.duration)
             self.playback_time = wp.clamp(self.playback_time, 0.0, self.playback_total_time)
@@ -1086,6 +1124,41 @@ class Viewer:
                 0, 0, len(self.calibration_joint_q))
             newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state, None)
             return
+
+        if (self.newton_snap_active and self.newton_snap_data is not None
+                and self.newton_snap_drive_robot):
+            q = self.newton_snap_data.sample_q(
+                self.newton_snap_focus_iter_id,
+                float(self.playback_time),
+                align=self.newton_snap_align)
+            robot_i = 1 if self.num_robots >= 2 else 0
+            if q is not None and q.shape[0] == self.robot_num_joint_q:
+                robot_offset = self.robot_offsets[robot_i]
+                joint_q_offset = self.robot_joint_q_offsets[robot_i]
+                q = np.asarray(q, dtype=np.float32)
+                root_tx = wp.mul(robot_offset, wp.transform(*q[:7]))
+                framed = np.concatenate(
+                    (np.asarray(root_tx, dtype=np.float32), q[7:])).astype(np.float32)
+                if (self.to_playback_enabled and self.to_playback_data is not None
+                        and self.num_robots >= 2):
+                    origin_q = np.asarray(
+                        self.to_playback_data.sample_origin(self.playback_time),
+                        dtype=np.float32)
+                    o_off = self.robot_offsets[0]
+                    o_tx = wp.mul(o_off, wp.transform(*origin_q[:7]))
+                    o_framed = np.concatenate(
+                        (np.asarray(o_tx, dtype=np.float32), origin_q[7:])
+                    ).astype(np.float32)
+                    wp.copy(
+                        self.model.joint_q,
+                        wp.array(o_framed, dtype=wp.float32),
+                        self.robot_joint_q_offsets[0], 0, self.robot_num_joint_q)
+                wp.copy(
+                    self.model.joint_q,
+                    wp.array(framed, dtype=wp.float32),
+                    joint_q_offset, 0, self.robot_num_joint_q)
+                newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state, None)
+                return
 
         if (self.to_playback_enabled and self.to_playback_data is not None
                 and self.num_robots >= 2):
@@ -1135,18 +1208,24 @@ class Viewer:
 
         newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state, None)
 
-    def step(self):
-        self.time += self.frame_dt
+    def step(self, wall_dt: float | None = None):
+        # Advance by real wall time so Speed means realtime rate even when draw
+        # fps is below the nominal 60 fps target (otherwise motion is permanently slow).
+        dt = float(self.frame_dt if wall_dt is None else wall_dt)
+        dt = float(np.clip(dt, 1e-4, 0.25))
+        self.time += dt
         if self.is_playing and not self.calibration_mode:
-            self.playback_time += self.frame_dt * self.playback_speed
+            self.playback_time += dt * float(self.playback_speed)
             if self.playback_loop and self.playback_total_time > 0.0:
                 self.playback_time %= self.playback_total_time
             else:
                 self.playback_time = max(0.0, min(self.playback_time, self.playback_total_time))
 
         if not self.calibration_mode:
-            # Skip BVH skeleton updates while TO Playback owns the timeline.
-            if not (self.to_playback_enabled and self.to_playback_data is not None):
+            # Skip BVH skeleton updates while TO / Newton snapshots own the timeline.
+            to_owns = (self.to_playback_enabled and self.to_playback_data is not None)
+            ns_owns = (self.newton_snap_active and self.newton_snap_data is not None)
+            if not (to_owns or ns_owns):
                 for i in range(len(self.animation_buffers)):
                     self.skeleton_instances[i].set_local_transforms(
                         self.animation_buffers[i].sample(self.playback_time))
@@ -1169,7 +1248,9 @@ class Viewer:
         self.viewer.begin_frame(self.time)
         to_owns_timeline = (
             self.to_playback_enabled and self.to_playback_data is not None)
-        if (not self.calibration_mode and not to_owns_timeline
+        ns_owns_timeline = (
+            self.newton_snap_active and self.newton_snap_data is not None)
+        if (not self.calibration_mode and not to_owns_timeline and not ns_owns_timeline
                 and len(self.animation_buffers) > 0):
             for i in range(len(self.skeleton_instances)):
                 prev_xform = wp.transform(self.skeleton_instances[i].xform)
@@ -1205,6 +1286,7 @@ class Viewer:
         if self.to_playback_enabled:
             to_force_utils.draw_floor_reflections(self.viewer, self.model)
         self._render_to_playback_forces()
+        self._render_newton_snapshots()
 
         if self.show_ik_map_axes:
             self._render_ik_map_axes()
@@ -1216,12 +1298,37 @@ class Viewer:
 
     def run(self):
         while self.viewer.is_running():
+            now = time.perf_counter()
+            if self._playback_clock_t0 is None:
+                wall_dt = float(self.frame_dt)
+            else:
+                wall_dt = now - self._playback_clock_t0
+            self._playback_clock_t0 = now
             with wp.ScopedTimer("step", active=False):
-                self.step()
+                self.step(wall_dt)
             with wp.ScopedTimer("render", active=False):
                 self.render()
+            self._update_playback_pacing(wall_dt)
 
         self.viewer.close()
+
+    def _update_playback_pacing(self, wall_dt: float):
+        """Report draw fps; with wall-clock sync, motion rate ≈ set Speed."""
+        if wall_dt <= 1e-4 or wall_dt > 1.5:
+            return
+        alpha = 0.12
+        if self._playback_wall_ema is None:
+            self._playback_wall_ema = float(wall_dt)
+        else:
+            self._playback_wall_ema = (
+                (1.0 - alpha) * float(self._playback_wall_ema) + alpha * float(wall_dt))
+
+        self._playback_draw_fps = 1.0 / max(1e-6, float(self._playback_wall_ema))
+        # Wall-clock step ⇒ motion realtime multiplier equals the Speed setting.
+        self._playback_effective_speed = float(self.playback_speed)
+        # Warn only about sparse frames (looks choppy), not wrong Speed.
+        self._playback_lag_warn = bool(
+            self.is_playing and self._playback_draw_fps < 0.85 * float(self.fps))
 
     def retarget_motion(self):
         retarget_source = self.retarget_source_options[self.retarget_source_idx]
@@ -1471,6 +1578,13 @@ class Viewer:
         ui.separator()
 
         if ui.collapsing_header(
+                "Newton Snapshots",
+                flags=ui.TreeNodeFlags_.default_open):
+            self._draw_newton_snapshots_content(ui)
+
+        ui.separator()
+
+        if ui.collapsing_header(
                 "Scene Objects",
                 flags=ui.TreeNodeFlags_.default_open):
             self._draw_scene_objects_content(ui)
@@ -1617,6 +1731,167 @@ class Viewer:
             ui.text("transparent = origin   |   solid = TO")
 
         ui.text_wrapped(self.to_playback_status)
+
+    def _render_newton_snapshots(self):
+        if not (self.newton_snap_active and self.newton_snap_data is not None):
+            return
+        newton_snap_utils.draw_snapshot_overlays(
+            self.viewer,
+            self.newton_snap_data,
+            time_s=float(self.playback_time),
+            align=self.newton_snap_align,
+            resample_dt=float(self.newton_snap_resample_dt),
+            max_iter_id=int(self.newton_snap_max_iter_id),
+            show_trails=bool(self.newton_snap_show_trails),
+            show_poses=bool(self.newton_snap_show_poses),
+        )
+
+    def load_newton_snapshots_folder(self, folder: str):
+        """Load a CIO ``newton_snapshots`` directory for overlay playback."""
+        robot_key = None
+        if self.to_playback_robot_keys:
+            robot_key = self.to_playback_robot_keys[self.to_playback_robot_idx]
+        data = newton_snap_utils.load_newton_snapshots(folder, robot_key=robot_key)
+        expected = self.robot_num_joint_q
+        if data.iters and data.iters[0].q_quat.shape[1] != expected:
+            raise ValueError(
+                f"Newton q width {data.iters[0].q_quat.shape[1]} != "
+                f"model expects {expected} (robot session={self.robot_type}, "
+                f"snap={data.soma_robot_type}). Use matching --config."
+            )
+        if data.soma_robot_type != self.robot_type:
+            raise ValueError(
+                f"Snapshots robot '{data.robot_key}' → '{data.soma_robot_type}', "
+                f"but viewer is '{self.robot_type}'."
+            )
+
+        self.newton_snap_data = data
+        self.newton_snap_dir = data.folder
+        self.newton_snap_active = True
+        self.newton_snap_status = data.status
+        self.newton_snap_max_iter_id = data.iters[-1].iter_id
+        self.newton_snap_focus_iter_id = data.iters[-1].iter_id
+        self.calibration_mode = False
+        self._clear_reference_overlay()
+        self.playback_time = 0.0
+        self.compute_playback_total_time()
+        self.is_playing = True
+        self.update_robot_states()
+        print(f"[INFO]: {self.newton_snap_status}")
+
+    def clear_newton_snapshots(self):
+        self.newton_snap_data = None
+        self.newton_snap_active = False
+        self.newton_snap_status = "Newton Snapshots cleared."
+        newton_snap_utils.clear_snapshot_overlays(self.viewer)
+        self.compute_playback_total_time()
+
+    def _draw_newton_snapshots_content(self, ui):
+        """Newton-iteration convergence overlays + dt side plot."""
+        import tkinter as tk
+        from tkinter import filedialog as tk_filedialog
+
+        ui.text_colored(
+            ui.ImVec4(0.75, 0.9, 1.0, 1.0),
+            "Overlay Newton iters (resampled). Blue=early → orange=late.")
+        ui.text_wrapped(
+            "Align: absolute = same clock (s). "
+            "normalized = stretch each traj to progress τ∈[0,1].")
+
+        ui.align_text_to_frame_padding()
+        ui.text("Folder:")
+        if self.newton_snap_dir:
+            ui.text_wrapped(self.newton_snap_dir)
+        else:
+            ui.text_disabled("(none selected)")
+
+        if ui.button("Browse…##nsbrowse"):
+            root = tk.Tk()
+            root.withdraw()
+            folder = tk_filedialog.askdirectory(
+                title="Select newton_snapshots folder",
+                initialdir=self.newton_snap_dir or str(pathlib.Path.home()))
+            root.destroy()
+            if folder:
+                self.newton_snap_dir = folder
+
+        ui.same_line()
+        if ui.button("Load##nsload"):
+            if not self.newton_snap_dir:
+                self.newton_snap_status = "Select a snapshots folder first."
+            else:
+                try:
+                    self.load_newton_snapshots_folder(self.newton_snap_dir)
+                except Exception as exc:
+                    self.newton_snap_status = f"Load failed: {exc}"
+                    print(f"[ERROR]: Newton Snapshots load failed: {exc}")
+
+        ui.same_line()
+        if ui.button("Clear##nsclear"):
+            self.clear_newton_snapshots()
+
+        align_idx = self.newton_snap_align_options.index(self.newton_snap_align)
+        changed_a, align_idx = ui.combo(
+            "Align##nsalign", align_idx, self.newton_snap_align_options)
+        if changed_a:
+            self.newton_snap_align = self.newton_snap_align_options[align_idx]
+            self.compute_playback_total_time()
+
+        ui.set_next_item_width(200)
+        rd_changed, rd_val = ui.slider_float(
+            "resample Δt##nsdt",
+            float(self.newton_snap_resample_dt), 0.02, 0.5, "%.3f")
+        if rd_changed:
+            self.newton_snap_resample_dt = float(rd_val)
+
+        _, self.newton_snap_show_trails = ui.checkbox(
+            "Show base trails", self.newton_snap_show_trails)
+        _, self.newton_snap_show_poses = ui.checkbox(
+            "Show pose markers @ t", self.newton_snap_show_poses)
+        _, self.newton_snap_drive_robot = ui.checkbox(
+            "Drive solid robot (focus iter)", self.newton_snap_drive_robot)
+
+        if self.newton_snap_data is not None:
+            ids = self.newton_snap_data.iter_ids
+            id_min, id_max = ids[0], ids[-1]
+            ui.set_next_item_width(200)
+            mi_changed, mi_val = ui.slider_int(
+                "show up to iter##nsmax",
+                int(self.newton_snap_max_iter_id), id_min, id_max)
+            if mi_changed:
+                # Snap slider to a loaded iter id (nearest ≤ value).
+                allowed = [i for i in ids if i <= mi_val]
+                self.newton_snap_max_iter_id = allowed[-1] if allowed else id_min
+
+            # Focus iter: index into loaded list for a clean combo.
+            focus_labels = [str(i) for i in ids]
+            try:
+                focus_idx = ids.index(self.newton_snap_focus_iter_id)
+            except ValueError:
+                focus_idx = len(ids) - 1
+            changed_f, focus_idx = ui.combo(
+                "Focus iter##nsfocus", focus_idx, focus_labels)
+            if changed_f:
+                self.newton_snap_focus_iter_id = ids[focus_idx]
+
+            ui.text_colored(
+                ui.ImVec4(0.7, 0.85, 1.0, 1.0),
+                f"{len(ids)} iters  T={self.newton_snap_data.min_duration:.3f}"
+                f"→{self.newton_snap_data.max_duration:.3f}s  "
+                f"align={self.newton_snap_align}")
+
+            ui.separator()
+            ui.text("dt evolution (focus iter)")
+            newton_snap_utils.draw_dt_plot(
+                ui,
+                self.newton_snap_data,
+                focus_iter_id=int(self.newton_snap_focus_iter_id),
+                time_s=float(self.playback_time),
+                align=self.newton_snap_align,
+                height=110.0,
+            )
+
+        ui.text_wrapped(self.newton_snap_status)
 
     def _clear_reference_overlay(self):
         """Remove the zero-pose reference overlay (mesh for SOMA, bones otherwise)."""
@@ -2233,15 +2508,22 @@ class Viewer:
 
     def ui_playback_controls(self, ui):
         viewport = ui.get_main_viewport()
-        
-        panel_height = 105
+
+        lag = bool(getattr(self, "_playback_lag_warn", False))
+        # Reserve bottom space so status lines are never clipped.
+        panel_height = 160 if lag else 120
         panel_width = viewport.size.x - 2 * (2 * _UI_NEWTON_PANEL_MARGIN + _UI_NEWTON_PANEL_WIDTH)
-        
-        ui.set_next_window_pos(ui.ImVec2(_UI_NEWTON_PANEL_WIDTH + _UI_NEWTON_PANEL_MARGIN, viewport.size.y - _UI_NEWTON_PANEL_MARGIN - panel_height))
+        margin = _UI_NEWTON_PANEL_MARGIN
+
+        ui.set_next_window_pos(ui.ImVec2(
+            _UI_NEWTON_PANEL_WIDTH + margin,
+            max(margin, viewport.size.y - margin - panel_height)))
         ui.set_next_window_size(ui.ImVec2(panel_width, panel_height))
         ui.set_next_window_bg_alpha(_UI_NEWTON_PANEL_ALPHA)
 
-        ui.begin("Playback Controls", flags=(ui.WindowFlags_.no_collapse | ui.WindowFlags_.no_resize))
+        ui.begin(
+            "Playback Controls",
+            flags=(ui.WindowFlags_.no_collapse | ui.WindowFlags_.no_resize))
         # Scrub with slider; type precise values in the input (%.4f).
         ui.align_text_to_frame_padding()
         ui.text("Time (s):")
@@ -2267,21 +2549,42 @@ class Viewer:
         self.is_playing = not ui.button("Pause") if self.is_playing else ui.button("Play ")
         ui.same_line()
 
-        # Speed slider
+        # Speed: slider + typed input (same pattern as Time).
         ui.align_text_to_frame_padding()
         ui.text("Speed")
         ui.same_line()
         ui.set_next_item_width(100)
         changed, new_speed = ui.slider_float(
             "##SpeedSlider",
-            self.playback_speed,
+            float(self.playback_speed),
             -2.0, 2.0,
             "%.2f"
         )
         if changed:
-            self.playback_speed = new_speed
+            self.playback_speed = float(new_speed)
+        ui.same_line()
+        # Wider field; step=0 hides +/- so the full value stays visible.
+        ui.set_next_item_width(110)
+        changed_si, new_speed_i = ui.input_float(
+            "##SpeedInput", float(self.playback_speed), 0.0, 0.0, "%.3f")
+        if changed_si:
+            self.playback_speed = float(np.clip(new_speed_i, -2.0, 2.0))
         ui.same_line()
         _, self.playback_loop = ui.checkbox("Loop", self.playback_loop)
+
+        if self._playback_wall_ema is not None:
+            fps_draw = float(getattr(self, "_playback_draw_fps", 0.0))
+            ui.text_colored(
+                ui.ImVec4(0.65, 0.75, 0.85, 1.0),
+                f"motion = Speed ({self.playback_speed:.2f}× realtime)  |  "
+                f"draw ~{fps_draw:.0f} fps")
+
+        if lag:
+            ui.text_colored(
+                ui.ImVec4(1.0, 0.55, 0.25, 1.0),
+                f"Low draw fps (target {self.fps:.0f}). Motion speed is OK; "
+                "frames look choppy. Hide forces / origin / HQ to smooth.")
+
         ui.end()
 
     def batched_retargeting(self):

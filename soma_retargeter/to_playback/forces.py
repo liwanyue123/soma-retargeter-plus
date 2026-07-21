@@ -348,7 +348,10 @@ def draw_floor_reflections(viewer, model) -> None:
                 continue
             if int(shape_body[s_idx]) < 0:
                 continue
-            if float(x_np[i, 2]) < 0.05:
+            # Only skip clearly subterranean mesh (penetration / debris).
+            # Do NOT cull near z=0: planted feet sit around 0–5 cm and must
+            # still appear in the floor mirror.
+            if float(x_np[i, 2]) < -0.02:
                 continue
             if robots_away and float(np.linalg.norm(x_np[i, 0:2])) < 0.25:
                 continue
@@ -600,7 +603,7 @@ def _rgb255(r: int, g: int, b: int) -> Tuple[float, float, float]:
 _STUDIO_LIGHT = _rgb255(226, 197, 141)
 # Newton UI "Sky Color" → sky_upper (zenith).  "Ground Color" → sky_lower (fog/horizon).
 _STUDIO_SKY_UPPER = _rgb255(52, 42, 42)
-_STUDIO_GROUND = _rgb255(63, 73, 81)
+_STUDIO_GROUND = _rgb255(149, 149, 149)
 _STUDIO_SKY_LOWER = _STUDIO_GROUND
 _GHOST_TINT = (0.78, 0.80, 0.82)
 _STUDIO_ROUGHNESS = 0.78
