@@ -8,7 +8,11 @@ and feeds origin (reference) + TO trajectories into dual robot articulations,
 mirroring ``humanoid_visualization/scripts/show_TO_data.py``.
 """
 
-from soma_retargeter.to_playback.loader import ToPlaybackData, load_history_run
+from soma_retargeter.to_playback.loader import (
+    ToPlaybackData,
+    load_history_run,
+    load_terrain_boxes,
+)
 from soma_retargeter.to_playback.robots import (
     TO_PLAYBACK_ROBOTS,
     get_to_robot_spec,
@@ -18,6 +22,7 @@ from soma_retargeter.to_playback.robots import (
 __all__ = [
     "ToPlaybackData",
     "load_history_run",
+    "load_terrain_boxes",
     "TO_PLAYBACK_ROBOTS",
     "get_to_robot_spec",
     "list_to_robot_keys",

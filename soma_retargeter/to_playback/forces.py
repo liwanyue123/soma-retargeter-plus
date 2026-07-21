@@ -526,6 +526,7 @@ def draw_contact_forces(
     """Draw red 3D force arrows (cylinder shaft + cone head).
 
     Arrow length = ``|F| * force_scale`` (metres).
+    ``shaft_radius`` / ``head_radius`` control arrow thickness (metres).
     """
     positions = np.asarray(positions, dtype=np.float64)
     forces = np.asarray(forces, dtype=np.float64)

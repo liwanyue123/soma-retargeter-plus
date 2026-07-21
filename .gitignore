@@ -16,6 +16,7 @@ wheels/
 # Log files, settings
 imgui.ini
 .soma_hq_visuals
+.soma_to_playback_force_prefs.json
 
 # Local retargeting test outputs (CSV) - regenerated on demand and would
 # otherwise bloat git LFS storage on every commit.

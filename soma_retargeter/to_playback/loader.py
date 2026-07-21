@@ -360,3 +360,83 @@ def load_history_run(
         to_type=to_type,
         status=status,
     )
+
+
+def _find_weights_jsonc(run_path: Path, robot_key: Optional[str] = None) -> Optional[Path]:
+    """Locate ``*_weights.jsonc`` for a run (copied into the folder or via pipeline path)."""
+    candidates: List[Path] = []
+    if robot_key:
+        candidates.append(run_path / f"{robot_key}_weights.jsonc")
+    candidates.extend(sorted(run_path.glob("*_weights.jsonc")))
+    candidates.extend(sorted(run_path.glob("*weights*.jsonc")))
+    for c in candidates:
+        if c.is_file():
+            return c
+
+    pipe_path = run_path / "pipeline_paths.jsonc"
+    if not pipe_path.is_file():
+        return None
+    try:
+        pipe_cfg = load_jsonc(pipe_path)
+    except Exception:
+        return None
+    rel = pipe_cfg.get("weights_path")
+    if not rel:
+        return None
+    rel_path = Path(str(rel))
+    # Try run_dir, then parents (history leaf → … → CIO resource root).
+    search_roots = [run_path, *run_path.parents]
+    for root in search_roots[:8]:
+        for cand in (
+            root / rel_path,
+            root / rel_path.name,
+            root / "config" / rel_path.name if rel_path.name else None,
+        ):
+            if cand is not None and cand.is_file():
+                return cand
+    return None
+
+
+def load_terrain_boxes(
+    run_dir: str | Path,
+    robot_key: Optional[str] = None,
+) -> Tuple[List[dict], Optional[str]]:
+    """Load CIO ``environment.boxes`` when ``has_box`` is true.
+
+    Returns:
+        (boxes, source_path): each box is
+        ``{"cx","cy","cz","hx","hy","hz"}`` (metres, Z-up, half-extents).
+        Empty list when flat ground / missing file / has_box false.
+    """
+    run_path = Path(run_dir).expanduser().resolve()
+    weights_path = _find_weights_jsonc(run_path, robot_key=robot_key)
+    if weights_path is None:
+        return [], None
+
+    try:
+        cfg = load_jsonc(weights_path)
+    except Exception as exc:
+        print(f"[WARN]: Failed to parse weights JSONC [{weights_path}]: {exc}")
+        return [], str(weights_path)
+
+    env = cfg.get("environment") or {}
+    if not bool(env.get("has_box", False)):
+        return [], str(weights_path)
+
+    raw_boxes = env.get("boxes") or []
+    boxes: List[dict] = []
+    for b in raw_boxes:
+        if not isinstance(b, dict):
+            continue
+        try:
+            boxes.append({
+                "cx": float(b["cx"]),
+                "cy": float(b["cy"]),
+                "cz": float(b["cz"]),
+                "hx": float(b["hx"]),
+                "hy": float(b["hy"]),
+                "hz": float(b["hz"]),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+    return boxes, str(weights_path)

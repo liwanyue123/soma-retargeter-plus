@@ -212,12 +212,17 @@ class Viewer:
         self.to_playback_layout = "overlay"
         self.to_playback_layout_options = ["overlay", "side_by_side"]
         self.to_playback_force_scale = 0.025
+        # Multiplier on default shaft/head radii (1 = stock thickness).
+        self.to_playback_force_thickness = 1.0
+        self._load_to_playback_force_prefs()
         self.to_playback_show_forces = True
-        # Real alpha when newton_alpha patch is active (1=solid, ~0.28=ghost).
-        # Keep modest so coincident overlay does not mottled the TO shell.
+        # Real alpha when newton_alpha patch is active. Fixed ghost opacity
+        # (no UI): keep modest so coincident overlay does not mottle the TO shell.
         self.to_playback_show_origin = True
         self.to_playback_origin_opacity = 0.28
         self.to_playback_run_dir = str(self.config.get("to_run_dir") or "")
+        self.to_playback_terrain_boxes = []  # CIO environment.boxes (world Z-up)
+        self._terrain_box_logged_ids = set()
         self._to_contact_body_indices = None
         self._to_contact_sites = ()
         self._to_original_shape_colors = None
@@ -230,6 +235,38 @@ class Viewer:
                 origin_opacity=self.to_playback_origin_opacity)
             self.robot_offsets = to_force_utils.default_layout_offsets(
                 self.to_playback_layout)
+
+    def _to_playback_force_prefs_path(self):
+        return io_utils.get_project_root() / ".soma_to_playback_force_prefs.json"
+
+    def _load_to_playback_force_prefs(self):
+        path = self._to_playback_force_prefs_path()
+        if not path.is_file():
+            return
+        try:
+            data = json.loads(path.read_text())
+        except Exception as exc:
+            print(f"[WARN]: Failed to load TO force prefs [{path}]: {exc}")
+            return
+        if "force_scale" in data:
+            self.to_playback_force_scale = float(
+                np.clip(float(data["force_scale"]), 0.005, 2.0))
+        if "force_thickness" in data:
+            self.to_playback_force_thickness = float(
+                np.clip(float(data["force_thickness"]), 0.2, 5.0))
+
+    def _save_to_playback_force_prefs(self):
+        path = self._to_playback_force_prefs_path()
+        data = {
+            "_comment": "Persisted TO Playback force-arrow prefs "
+                        "(force scale / arrow thickness).",
+            "force_scale": round(float(self.to_playback_force_scale), 6),
+            "force_thickness": round(float(self.to_playback_force_thickness), 6),
+        }
+        try:
+            path.write_text(json.dumps(data, indent=2) + "\n")
+        except Exception as exc:
+            print(f"[WARN]: Failed to save TO force prefs [{path}]: {exc}")
 
     def _init_scene_objects(self):
         """State for user-placed scene primitives (boxes, etc.)."""
@@ -798,11 +835,14 @@ class Viewer:
         positions = to_force_utils.contact_world_positions(
             body_q, self._to_contact_body_indices, self._to_contact_sites)
         forces = self.to_playback_data.sample_forces(self.playback_time)
+        thick = float(self.to_playback_force_thickness)
         to_force_utils.draw_contact_forces(
             self.viewer,
             positions,
             forces,
             force_scale=self.to_playback_force_scale,
+            shaft_radius=0.018 * thick,
+            head_radius=0.042 * thick,
         )
         to_force_utils.draw_contact_force_reflections(self.viewer)
 
@@ -860,6 +900,7 @@ class Viewer:
             robot_offset=self.robot_offsets[1],
         )
         self.update_robot_states()
+        self._load_to_playback_terrain(data.run_dir, data.robot_key)
         self.playback_total_time = float(data.duration)
         self.is_playing = True
         print(f"[INFO]: {self.to_playback_status}")
@@ -896,6 +937,7 @@ class Viewer:
         self.to_playback_enabled = False
         self._to_contact_body_indices = None
         self._to_contact_sites = ()
+        self._clear_to_playback_terrain()
         self.to_playback_status = "TO Playback cleared."
         to_force_utils.restore_shape_appearance(
             self.viewer,
@@ -903,6 +945,80 @@ class Viewer:
             self._to_original_shape_materials)
         to_force_utils.clear_contact_force_overlays(self.viewer)
         to_force_utils.clear_floor_reflections(self.viewer)
+
+    def _clear_to_playback_terrain(self):
+        for i in list(getattr(self, "_terrain_box_logged_ids", set())):
+            self._hide_terrain_box(i)
+        self.to_playback_terrain_boxes = []
+        self._terrain_box_logged_ids = set()
+
+    def _hide_terrain_box(self, box_id: int):
+        path = f"/to_playback/terrain_box_{box_id}"
+        if hasattr(self.viewer, "objects") and path in self.viewer.objects:
+            obj = self.viewer.objects[path]
+            destroy = getattr(obj, "destroy", None)
+            if callable(destroy):
+                destroy()
+            del self.viewer.objects[path]
+        self._terrain_box_logged_ids.discard(box_id)
+
+    def _load_to_playback_terrain(self, run_dir: str, robot_key: str):
+        """Draw CIO environment.boxes when weights has_box=true."""
+        self._clear_to_playback_terrain()
+        boxes, weights_path = to_playback.load_terrain_boxes(
+            run_dir, robot_key=robot_key)
+        if not boxes:
+            if weights_path:
+                print(f"[INFO]: Terrain flat (has_box=false or empty) "
+                      f"from [{weights_path}]")
+            else:
+                print(f"[INFO]: No *_weights.jsonc found under [{run_dir}]; "
+                      "skipping terrain boxes.")
+            return
+
+        terrain = []
+        for i, b in enumerate(boxes):
+            # CIO: center (cx,cy,cz) + half-extents (hx,hy,hz). Viewer box
+            # instances use full edge length in ``size`` and center transform.
+            terrain.append({
+                "id": i,
+                "size": wp.vec3(2.0 * b["hx"], 2.0 * b["hy"], 2.0 * b["hz"]),
+                "transform": wp.transform(
+                    wp.vec3(b["cx"], b["cy"], b["cz"]),
+                    wp.quat_identity()),
+                "color": wp.vec3(0.55, 0.58, 0.62),
+            })
+        self.to_playback_terrain_boxes = terrain
+        msg = f"Terrain: {len(terrain)} box(es) from {weights_path}"
+        self.to_playback_status = f"{self.to_playback_status}  |  {msg}"
+        print(f"[INFO]: {msg}")
+
+    def _render_to_playback_terrain(self):
+        boxes = getattr(self, "to_playback_terrain_boxes", None) or []
+        active = set()
+        if not boxes:
+            for stale in list(getattr(self, "_terrain_box_logged_ids", set())):
+                self._hide_terrain_box(stale)
+            return
+
+        unit_mesh = self._ensure_scene_unit_box_mesh()
+        for obj in boxes:
+            box_id = int(obj["id"])
+            active.add(box_id)
+            sz = obj["size"]
+            path = f"/to_playback/terrain_box_{box_id}"
+            xforms = wp.array([obj["transform"]], dtype=wp.transform)
+            # Unit box half-extents=1 → scale = full_size / 2 = half-extents.
+            scales = wp.array(
+                [wp.vec3(float(sz[0]) * 0.5, float(sz[1]) * 0.5, float(sz[2]) * 0.5)],
+                dtype=wp.vec3)
+            colors = wp.array([obj["color"]], dtype=wp.vec3)
+            self.viewer.log_instances(
+                path, unit_mesh, xforms, scales, colors, None, hidden=False)
+
+        for stale in self._terrain_box_logged_ids - active:
+            self._hide_terrain_box(stale)
+        self._terrain_box_logged_ids = active
 
     def load_bvh_file(self, path):
         self._loaded_bvh_path = path
@@ -1083,6 +1199,7 @@ class Viewer:
                 self.viewer.log_gizmo(f"animation_offset{i}", offset)
 
         self._render_scene_objects()
+        self._render_to_playback_terrain()
 
         self.viewer.log_state(self.state)
         if self.to_playback_enabled:
@@ -1450,27 +1567,21 @@ class Viewer:
         ui.set_next_item_width(200)
         sc_changed, sc_val = ui.slider_float(
             "force scale##toplayfscale",
-            float(self.to_playback_force_scale), 0.005, 0.08, "%.3f")
+            float(self.to_playback_force_scale), 0.005, 2.0, "%.3f")
         if sc_changed:
             self.to_playback_force_scale = sc_val
+            self._save_to_playback_force_prefs()
         ui.text_disabled("Arrow length = |F|(N) * scale  (default 0.025)")
 
         ui.set_next_item_width(200)
-        op_changed, op_val = ui.slider_float(
-            "origin opacity##toplayopacity",
-            float(self.to_playback_origin_opacity), 0.05, 1.0, "%.2f")
-        if op_changed:
-            self.to_playback_origin_opacity = op_val
-            if self.to_playback_show_origin:
-                self._apply_to_playback_layout()
+        th_changed, th_val = ui.slider_float(
+            "arrow thickness##toplayfthick",
+            float(self.to_playback_force_thickness), 0.2, 5.0, "%.2f")
+        if th_changed:
+            self.to_playback_force_thickness = th_val
+            self._save_to_playback_force_prefs()
         ui.text_disabled(
-            "Opacity of the origin/reference robot (ghost). "
-            "1 = solid, ~0.3 = typical ghost.")
-        from soma_retargeter.to_playback import newton_alpha as _na
-        if _na.is_mesh_alpha_enabled():
-            ui.text_disabled("True mesh alpha (Newton GL patched).")
-        else:
-            ui.text_disabled("Alpha patch inactive — using pale ghost fallback.")
+            "Shaft/head radius multiplier (1 = default). Prefs auto-saved.")
 
         if ui.button("Reset studio look##toplayenv"):
             to_force_utils.apply_studio_environment(self.viewer)
@@ -1480,10 +1591,29 @@ class Viewer:
 
         if self.to_playback_data is not None:
             d = self.to_playback_data
-            ui.text_colored(
-                ui.ImVec4(0.55, 0.9, 0.6, 1.0),
-                f"origin {d.origin_q_quat.shape[0]}f@{d.origin_dt:.4f}s  |  "
-                f"to {d.to_q_quat.shape[0]}f@{d.to_dt:.4f}s")
+            ui.align_text_to_frame_padding()
+            ui.text(f"origin {d.origin_q_quat.shape[0]}f  dt")
+            ui.same_line()
+            ui.set_next_item_width(90)
+            odt_changed, odt_val = ui.input_float(
+                "##origindt", float(d.origin_dt), 0.0, 0.0, "%.4f")
+            if odt_changed and odt_val > 1e-6:
+                d.origin_dt = float(odt_val)
+                self.compute_playback_total_time()
+            ui.same_line()
+            ui.text(f"|  to {d.to_q_quat.shape[0]}f  dt")
+            ui.same_line()
+            ui.set_next_item_width(90)
+            tdt_changed, tdt_val = ui.input_float(
+                "##todt", float(d.to_dt), 0.0, 0.0, "%.4f")
+            if tdt_changed and tdt_val > 1e-6:
+                d.to_dt = float(tdt_val)
+                self.compute_playback_total_time()
+            n_terrain = len(getattr(self, "to_playback_terrain_boxes", []) or [])
+            if n_terrain:
+                ui.text_colored(
+                    ui.ImVec4(0.7, 0.85, 1.0, 1.0),
+                    f"Terrain boxes drawn: {n_terrain}")
             ui.text("transparent = origin   |   solid = TO")
 
         ui.text_wrapped(self.to_playback_status)
@@ -2112,22 +2242,28 @@ class Viewer:
         ui.set_next_window_bg_alpha(_UI_NEWTON_PANEL_ALPHA)
 
         ui.begin("Playback Controls", flags=(ui.WindowFlags_.no_collapse | ui.WindowFlags_.no_resize))
-        # Time slider
+        # Scrub with slider; type precise values in the input (%.4f).
         ui.align_text_to_frame_padding()
         ui.text("Time (s):")
         ui.same_line()
-        ui.set_next_item_width(panel_width - 150)
-        changed, new_time = ui.slider_float(
+        ui.set_next_item_width(max(80.0, panel_width - 320))
+        changed_s, new_time_s = ui.slider_float(
             "##TimeSlider",
-            self.playback_time,
+            float(self.playback_time),
             0.0,
-            self.playback_total_time,
-            "%.2f")
-        if changed:
-            self.playback_time = wp.clamp(new_time, 0.0, self.playback_total_time)
+            max(self.playback_total_time, 1e-6),
+            "%.4f")
+        if changed_s:
+            self.playback_time = wp.clamp(new_time_s, 0.0, self.playback_total_time)
         ui.same_line()
-        ui.text_colored(ui.ImVec4(0.6, 0.8, 1.0, 1.0), f"{self.playback_total_time:.2f}s")
-        
+        ui.set_next_item_width(110)
+        changed_i, new_time_i = ui.input_float(
+            "##TimeInput", float(self.playback_time), 0.01, 0.1, "%.4f")
+        if changed_i:
+            self.playback_time = wp.clamp(new_time_i, 0.0, self.playback_total_time)
+        ui.same_line()
+        ui.text_colored(ui.ImVec4(0.6, 0.8, 1.0, 1.0), f"/ {self.playback_total_time:.4f}s")
+
         self.is_playing = not ui.button("Pause") if self.is_playing else ui.button("Play ")
         ui.same_line()
 
