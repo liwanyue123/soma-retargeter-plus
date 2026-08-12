@@ -1,0 +1,60 @@
+{
+    "_comment": "Luveotics L0 V2 (21-DOF) reference / zero pose: slight knee bend, soles flat, feet under the torso and a bit forward (~3.5 cm). Sagittal: ankle = -(hip_pitch + knee). Adjust further in the GUI Calibration panel, then Save Pose.",
+    "base_pos": [
+        0.0,
+        0.0,
+        0.339
+    ],
+    "base_quat_xyzw": [
+        0.0,
+        0.0,
+        -0.7071068,
+        0.7071068
+    ],
+    "joint_order": [
+        "left_hip_pitch_joint",
+        "left_hip_roll_joint",
+        "left_hip_yaw_joint",
+        "left_knee_joint",
+        "left_ankle_pitch_joint",
+        "left_ankle_roll_joint",
+        "right_hip_pitch_joint",
+        "right_hip_roll_joint",
+        "right_hip_yaw_joint",
+        "right_knee_joint",
+        "right_ankle_pitch_joint",
+        "right_ankle_roll_joint",
+        "left_shoulder_pitch_joint",
+        "left_shoulder_roll_joint",
+        "left_elbow_roll_joint",
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_elbow_roll_joint",
+        "neck_yaw_joint",
+        "neck_pitch_joint",
+        "neck_roll_joint"
+    ],
+    "joint_angles_rad": [
+        -0.25,
+        0.0,
+        0.0,
+        0.45,
+        -0.20,
+        0.0,
+        -0.25,
+        0.0,
+        0.0,
+        0.45,
+        -0.20,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+    ]
+}

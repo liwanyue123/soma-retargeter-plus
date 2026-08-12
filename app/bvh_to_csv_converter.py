@@ -32,6 +32,10 @@ _UI_NEWTON_PANEL_MARGIN = 10
 _UI_NEWTON_PANEL_ALPHA  = 0.9
 _DEFAULT_COLOR = (235.0 / 255.0, 245.0 / 255.0, 112.0 / 255.0)
 
+# Built-in T-pose BVH for the SOMA source (holding-box zero lives in each
+# robot's retargeter config as ``initialization_pose``).
+_SOMA_TPOSE_BVH = "sources/soma/soma_tpose_frame0.bvh"
+
 class Viewer:
     def __init__(self, viewer, config):
         self.viewer = viewer
@@ -97,6 +101,7 @@ class Viewer:
             'hightorque_pi_plus_s',
             'pndbotics_adam_lite',
             'pndbotics_adam_sp',
+            'luveotics_l0_v2',
         ]
         self.retarget_solver_options = ['Newton']
         self.retarget_solver_idx     = 0
@@ -232,11 +237,20 @@ class Viewer:
         """
         self.calibration_mode = False
         self.show_zero_pose_reference = False
+        # Human init-pose variant for calibration overlay + retarget init
+        # ("zero" = holding-box / config initialization_pose; "tpose" when available).
+        self.human_init_pose_variant = "zero"
 
         retargeter_cfg = pipeline_utils.get_retargeter_config(
             self.source_type,
             pipeline_utils.get_target_type_from_str(self.robot_type))
         self._calibration_retargeter_cfg = retargeter_cfg
+        # Authored paths (do not mutate these when the UI switches variants).
+        self._human_init_pose_zero_rel = retargeter_cfg["initialization_pose"]
+        tpose_rel = retargeter_cfg.get("tpose_initialization_pose")
+        if tpose_rel is None and self.source_type == pipeline_utils.SourceType.SOMA:
+            tpose_rel = _SOMA_TPOSE_BVH
+        self._human_init_pose_tpose_rel = tpose_rel
         # Path to the retargeter config on disk (so the scale slider can persist).
         rt_filename = pipeline_utils._RETARGETER_CONFIG_FILENAME.get(
             (self.source_type, self.robot_type))
@@ -251,40 +265,7 @@ class Viewer:
         self._calibration_offsets_cfg_path = (
             io_utils.get_config_file(offsets_cfg_rel) if offsets_cfg_rel else scaler_cfg_path)
 
-        init_bvh = io_utils.get_config_file(retargeter_cfg['initialization_pose'])
-        # By default the init pose loads at the SAME scale/convention as the live
-        # motion (so the zero pose and data are the same size). Optional config
-        # keys still let a retargeter config override the loading parameters and
-        # world-space orientation if an init pose is authored differently.
-        init_pos_scale = retargeter_cfg.get('init_pose_position_scale', self.source_position_scale)
-        init_recenter  = retargeter_cfg.get('init_pose_recenter_xy',    self.source_recenter_xy)
-        ref_skel, ref_anim = bvh_utils.load_bvh(
-            init_bvh, position_scale=init_pos_scale, recenter_xy=init_recenter,
-            position_scale_upper=self.source_position_scale_upper,
-            position_scale_lower=self.source_position_scale_lower)
-        self.zero_pose_reference_skeleton = ref_skel
-        self.zero_pose_reference_local_zero = ref_anim.get_local_transforms(0).copy()
-        # Optional converter override: if the init-pose BVH has a different
-        # coordinate convention than the live source, use a dedicated converter
-        # so the skeleton overlay renders upright in the viewer.
-        init_facing = retargeter_cfg.get('init_pose_facing_direction', None)
-        if init_facing is not None:
-            init_yaw = float(retargeter_cfg.get('init_pose_yaw_offset_deg', 0.0))
-            init_converter = SpaceConverter(
-                get_facing_direction_type_from_str(init_facing), yaw_offset_deg=init_yaw)
-            init_xform = init_converter.transform(wp.transform_identity())
-        else:
-            init_xform = self.converter.transform(wp.transform_identity())
-        self.zero_pose_reference_instance = SkeletonInstance(
-            ref_skel, [0.6, 0.7, 1.0], init_xform)
-        self.zero_pose_reference_instance.set_local_transforms(self.zero_pose_reference_local_zero)
-
-        self.zero_pose_reference_mesh = pipeline_utils.get_source_model_mesh(
-            self.source_type, ref_skel)
-        self.zero_pose_reference_mesh_renderer = (
-            SkeletalMeshRenderer(self.zero_pose_reference_mesh)
-            if self.zero_pose_reference_mesh is not None else None)
-        self.zero_pose_reference_skeleton_renderer = SkeletonRenderer(ref_skel, [0])
+        self._load_human_init_pose_reference(self.human_init_pose_variant)
 
         # Discover revolute joints (skip free + fixed) so we can build sliders.
         # joint_limit_lower/upper are indexed per-DOF (length = joint_dof_count),
@@ -448,7 +429,10 @@ class Viewer:
         cfg['retarget_source_position_scale_lower'] = round(float(self.source_position_scale_lower), 6)
         with open(path, 'w') as f:
             json.dump(cfg, f, indent=4)
-        self._calibration_retargeter_cfg = cfg
+        # Keep the live human-init override (Zero / T-pose) after reloading disk cfg.
+        self._calibration_retargeter_cfg = dict(cfg)
+        self._calibration_retargeter_cfg["initialization_pose"] = (
+            self._resolve_human_init_pose_bvh(self.human_init_pose_variant))
         self._source_scale_dirty = False
         self._calibration_status = (
             f"Saved source position scale (uniform={self.source_position_scale:.3f}, "
@@ -896,8 +880,11 @@ class Viewer:
             import soma_retargeter.pipelines.newton_pipeline as newton_pipeline
             # Pass the live source scale so the pipeline's init pose is loaded at
             # the same size as the (already-scaled) motion buffers we feed it.
+            # Also pass the in-memory retargeter cfg so a Calibration-panel
+            # human-init switch (Zero / T-pose) applies to retarget init too.
             pipeline = newton_pipeline.NewtonPipeline(
                 self.skeleton, retarget_source, retarget_target,
+                retarget_config=dict(self._calibration_retargeter_cfg),
                 source_position_scale=self.source_position_scale,
                 source_position_scale_upper=self.source_position_scale_upper,
                 source_position_scale_lower=self.source_position_scale_lower,
@@ -1133,6 +1120,92 @@ class Viewer:
         if getattr(self, "zero_pose_reference_skeleton_renderer", None) is not None:
             self.zero_pose_reference_skeleton_renderer.clear(self.viewer)
 
+    def _human_init_pose_options(self):
+        """Return ``[(variant_id, label, bvh_rel_path), ...]`` for the current source.
+
+        ``zero`` is the authored ``initialization_pose`` (typically holding-box).
+        ``tpose`` comes from ``tpose_initialization_pose`` or the built-in SOMA T-pose.
+        """
+        opts = [("zero", "Zero (box)", self._human_init_pose_zero_rel)]
+        tpose = getattr(self, "_human_init_pose_tpose_rel", None)
+        if tpose:
+            path = io_utils.get_config_file(tpose)
+            if path.exists():
+                opts.append(("tpose", "T-pose", tpose))
+        return opts
+
+    def _resolve_human_init_pose_bvh(self, variant: str) -> str:
+        """Return the relative BVH path for ``variant`` (``zero`` / ``tpose``)."""
+        for vid, _label, rel in self._human_init_pose_options():
+            if vid == variant:
+                return rel
+        return self._human_init_pose_zero_rel
+
+    def _load_human_init_pose_reference(self, variant: str):
+        """Load the human init-pose BVH used for overlay + calibration numerics.
+
+        Uses the same position-scale / recenter conventions as the live motion
+        so the reference stays size-matched. Optional per-config
+        ``init_pose_facing_direction`` still applies for orientation.
+        """
+        retargeter_cfg = self._calibration_retargeter_cfg
+        rel = self._resolve_human_init_pose_bvh(variant)
+        init_bvh = io_utils.get_config_file(rel)
+        init_pos_scale = retargeter_cfg.get('init_pose_position_scale', self.source_position_scale)
+        init_recenter = retargeter_cfg.get('init_pose_recenter_xy', self.source_recenter_xy)
+        ref_skel, ref_anim = bvh_utils.load_bvh(
+            init_bvh, position_scale=init_pos_scale, recenter_xy=init_recenter,
+            position_scale_upper=self.source_position_scale_upper,
+            position_scale_lower=self.source_position_scale_lower)
+        self.zero_pose_reference_skeleton = ref_skel
+        self.zero_pose_reference_local_zero = ref_anim.get_local_transforms(0).copy()
+        init_facing = retargeter_cfg.get('init_pose_facing_direction', None)
+        if init_facing is not None:
+            init_yaw = float(retargeter_cfg.get('init_pose_yaw_offset_deg', 0.0))
+            init_converter = SpaceConverter(
+                get_facing_direction_type_from_str(init_facing), yaw_offset_deg=init_yaw)
+            init_xform = init_converter.transform(wp.transform_identity())
+        else:
+            init_xform = self.converter.transform(wp.transform_identity())
+        self.zero_pose_reference_instance = SkeletonInstance(
+            ref_skel, [0.6, 0.7, 1.0], init_xform)
+        self.zero_pose_reference_instance.set_local_transforms(self.zero_pose_reference_local_zero)
+
+        self.zero_pose_reference_mesh = pipeline_utils.get_source_model_mesh(
+            self.source_type, ref_skel)
+        self.zero_pose_reference_mesh_renderer = (
+            SkeletalMeshRenderer(self.zero_pose_reference_mesh)
+            if self.zero_pose_reference_mesh is not None else None)
+        self.zero_pose_reference_skeleton_renderer = SkeletonRenderer(ref_skel, [0])
+        self.human_init_pose_variant = variant
+        # Keep in-memory retargeter cfg aligned so retarget / effector overlay
+        # use the same init pose the user selected.
+        self._calibration_retargeter_cfg = dict(self._calibration_retargeter_cfg)
+        self._calibration_retargeter_cfg["initialization_pose"] = rel
+
+    def _set_human_init_pose_variant(self, variant: str):
+        """Switch human init pose (overlay + calibration + retarget init)."""
+        if variant == getattr(self, "human_init_pose_variant", None):
+            return
+        available = {vid for vid, _l, _p in self._human_init_pose_options()}
+        if variant not in available:
+            print(f"[WARN]: Human init pose [{variant}] not available for "
+                  f"source [{self.source_str}]; keeping "
+                  f"[{self.human_init_pose_variant}].")
+            return
+        was_showing = bool(self.show_zero_pose_reference)
+        if was_showing:
+            self._clear_reference_overlay()
+        self._load_human_init_pose_reference(variant)
+        self._invalidate_effector_scaler()
+        self._calibration_last_offsets = None
+        self._calibration_last_scales = None
+        self._calibration_last_offsets_segmental = None
+        self._calibration_last_scales_segmental = None
+        self._calibration_status = (
+            f"Human init pose -> {variant}. Recompute scales/offsets if calibrating.")
+        print(f"[INFO]: {self._calibration_status}")
+
     def _draw_calibration_content(self, ui):
         """Calibration controls (inside collapsible section)."""
         import tkinter as tk
@@ -1187,6 +1260,25 @@ class Viewer:
             "Show Zero Pose Overlay", self.show_zero_pose_reference)
         if ref_changed and not self.show_zero_pose_reference:
             self._clear_reference_overlay()
+
+        # Human init pose on its own row (same-line radios were clipped by the
+        # narrow right panel and appeared unclickable).
+        pose_opts = self._human_init_pose_options()
+        if len(pose_opts) > 1:
+            labels = [label for _vid, label, _rel in pose_opts]
+            ids = [vid for vid, _label, _rel in pose_opts]
+            try:
+                cur = ids.index(self.human_init_pose_variant)
+            except ValueError:
+                cur = 0
+            ui.set_next_item_width(200)
+            changed, new_idx = ui.combo("Human init pose", cur, labels)
+            if changed and 0 <= new_idx < len(ids):
+                self._set_human_init_pose_variant(ids[new_idx])
+            ui.text_colored(
+                ui.ImVec4(0.7, 0.7, 0.7, 1.0),
+                "T-pose: use when the robot cannot match holding-box arms. "
+                "Affects overlay, calibration, and Retarget init.")
 
         ui.separator()
         # One-click "foolproof" calibration: match the robot to the zero pose
