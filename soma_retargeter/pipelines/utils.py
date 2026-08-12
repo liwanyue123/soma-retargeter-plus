@@ -48,7 +48,6 @@ class TargetType(IntEnum):
     HIGHTORQUE_PI_PLUS_S = auto()
     PNDBOTICS_ADAM_LITE = auto()
     PNDBOTICS_ADAM_SP = auto()
-    LUVEOTICS_L0_V2 = auto()
 
 _SOURCE_TYPE_TO_STR = {
     SourceType.SOMA    : "soma",
@@ -68,11 +67,10 @@ _TARGET_TYPE_TO_STR = {
     TargetType.HIGHTORQUE_PI_PLUS_S  : "hightorque_pi_plus_s",
     TargetType.PNDBOTICS_ADAM_LITE   : "pndbotics_adam_lite",
     TargetType.PNDBOTICS_ADAM_SP     : "pndbotics_adam_sp",
-    TargetType.LUVEOTICS_L0_V2       : "luveotics_l0_v2",
 }
 _STR_TO_TARGET_TYPE = {s : t for t, s in _TARGET_TYPE_TO_STR.items()}
 
-# Per-robot relative MJCF/URDF path under assets/robots/<robot_type>/ (and inside
+# Per-robot relative MJCF path under assets/robots/<robot_type>/ (and inside
 # Newton's downloadable asset bundle, which uses the same layout).
 _ROBOT_MJCF_RELATIVE_PATH = {
     "unitree_g1":           "mjcf/g1_29dof_rev_1_0.xml",
@@ -82,7 +80,6 @@ _ROBOT_MJCF_RELATIVE_PATH = {
     "hightorque_pi_plus_s": "xml/PiPlus_S_12L8A0G2H1W_LSE_260611.xml",
     "pndbotics_adam_lite":  "adam_lite.xml",
     "pndbotics_adam_sp":    "adam_sp.xml",
-    "luveotics_l0_v2":      "urdf/l0_v2_simplified_description.urdf",
 }
 
 # Initial base Z height (metres) for URDF-based robots. MJCF files encode
@@ -91,8 +88,7 @@ _ROBOT_MJCF_RELATIVE_PATH = {
 # (0, 0, 0), so we supply the standing height via the xform argument to
 # avoid the robot spawning inside the ground.
 _ROBOT_URDF_INITIAL_BASE_Z = {
-    # Standing hip height so soles sit on the ground in the zero pose.
-    "luveotics_l0_v2": 0.343,
+    # (no URDF-based robots currently; add entries here if needed)
 }
 
 # Per-robot retargeter config filename under
@@ -107,7 +103,6 @@ _RETARGETER_CONFIG_FILENAME = {
     (SourceType.SOMA, "hightorque_pi_plus_s"): "soma/soma_to_pi_plus_s_retargeter_config.json",
     (SourceType.SOMA, "pndbotics_adam_lite"): "soma/soma_to_adam_lite_retargeter_config.json",
     (SourceType.SOMA, "pndbotics_adam_sp"):   "soma/soma_to_adam_sp_retargeter_config.json",
-    (SourceType.SOMA, "luveotics_l0_v2"):     "soma/soma_to_l0_v2_retargeter_config.json",
     # Native skeleton (route A): retarget straight from your own joint names.
     (SourceType.MYDATA, "unitree_g1"):          "mydata/mydata_to_g1_retargeter_config.json",
     (SourceType.MYDATA, "engineai_pm01"):       "mydata/mydata_to_pm01_retargeter_config.json",
@@ -115,7 +110,6 @@ _RETARGETER_CONFIG_FILENAME = {
     (SourceType.MYDATA, "hightorque_pi_plus_s"): "mydata/mydata_to_pi_plus_s_retargeter_config.json",
     (SourceType.MYDATA, "pndbotics_adam_lite"): "mydata/mydata_to_adam_lite_retargeter_config.json",
     (SourceType.MYDATA, "pndbotics_adam_sp"):   "mydata/mydata_to_adam_sp_retargeter_config.json",
-    (SourceType.MYDATA, "luveotics_l0_v2"):     "mydata/mydata_to_l0_v2_retargeter_config.json",
     # Second native skeleton variant with its own calibration configs.
     (SourceType.MYDATA2, "unitree_g1"):          "mydata2/mydata2_to_g1_retargeter_config.json",
     (SourceType.MYDATA2, "engineai_pm01"):       "mydata2/mydata2_to_pm01_retargeter_config.json",
@@ -124,7 +118,6 @@ _RETARGETER_CONFIG_FILENAME = {
     (SourceType.MYDATA2, "hightorque_pi_plus_s"): "mydata2/mydata2_to_pi_plus_s_retargeter_config.json",
     (SourceType.MYDATA2, "pndbotics_adam_lite"): "mydata2/mydata2_to_adam_lite_retargeter_config.json",
     (SourceType.MYDATA2, "pndbotics_adam_sp"):   "mydata2/mydata2_to_adam_sp_retargeter_config.json",
-    (SourceType.MYDATA2, "luveotics_l0_v2"):     "mydata2/mydata2_to_l0_v2_retargeter_config.json",
     (SourceType.MYDATA3, "unitree_g1"):          "mydata3/mydata3_to_g1_retargeter_config.json",
     (SourceType.MYDATA3, "engineai_pm01"):       "mydata3/mydata3_to_pm01_retargeter_config.json",
     (SourceType.MYDATA3, "engineai_t800"):       "mydata3/mydata3_to_t800_retargeter_config.json",
@@ -132,7 +125,6 @@ _RETARGETER_CONFIG_FILENAME = {
     (SourceType.MYDATA3, "hightorque_pi_plus_s"): "mydata3/mydata3_to_pi_plus_s_retargeter_config.json",
     (SourceType.MYDATA3, "pndbotics_adam_lite"): "mydata3/mydata3_to_adam_lite_retargeter_config.json",
     (SourceType.MYDATA3, "pndbotics_adam_sp"):   "mydata3/mydata3_to_adam_sp_retargeter_config.json",
-    (SourceType.MYDATA3, "luveotics_l0_v2"):     "mydata3/mydata3_to_l0_v2_retargeter_config.json",
 
     (SourceType.MYDATA4, "unitree_g1"):          "mydata4/mydata4_to_g1_retargeter_config.json",
     (SourceType.MYDATA4, "engineai_pm01"):       "mydata4/mydata4_to_pm01_retargeter_config.json",
@@ -140,7 +132,6 @@ _RETARGETER_CONFIG_FILENAME = {
     (SourceType.MYDATA4, "hightorque_pi_plus_s"): "mydata4/mydata4_to_pi_plus_s_retargeter_config.json",
     (SourceType.MYDATA4, "pndbotics_adam_lite"): "mydata4/mydata4_to_adam_lite_retargeter_config.json",
     (SourceType.MYDATA4, "pndbotics_adam_sp"):   "mydata4/mydata4_to_adam_sp_retargeter_config.json",
-    (SourceType.MYDATA4, "luveotics_l0_v2"):     "mydata4/mydata4_to_l0_v2_retargeter_config.json",
     # LAFAN1 dataset skeleton. Add more (source, robot) rows here (+ matching
     # configs) to extend it.
     (SourceType.LAFAN1, "hightorque_pi_plus_s"): "lafan1/lafan1_to_pi_plus_s_retargeter_config.json",

@@ -224,26 +224,6 @@ class PNDboticsAdamSp_CSVConfig(_StandardCSVConfig):
         "elbow_Right", "wristYaw_Right", "wristPitch_Right", "wristRoll_Right"]
 
 
-@dataclass
-class LuveoticsL0V2_CSVConfig(_StandardCSVConfig):
-    """21-DOF humanoid by Luveotics (no waist, 3-DOF arms, 3-DOF neck).
-
-    Model: ``l0_v2_simplified_description``. CSV order matches the URDF
-    declaration / Newton actuated-DOF order (legs, then arms, then neck).
-    """
-    name: str = "luveotics_l0_v2_21dof"
-    csv_header: ClassVar[List[str]] = _ROOT_HEADER + [
-        "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",
-        "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
-        "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
-        "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
-        "left_shoulder_pitch_joint", "left_shoulder_roll_joint",
-        "left_elbow_roll_joint",
-        "right_shoulder_pitch_joint", "right_shoulder_roll_joint",
-        "right_elbow_roll_joint",
-        "neck_yaw_joint", "neck_pitch_joint", "neck_roll_joint"]
-
-
 _ROBOT_CSV_CONFIGS = {
     "unitree_g1":           UnitreeG129DOF_CSVConfig,
     "engineai_pm01":        EngineAIPM01_CSVConfig,
@@ -252,7 +232,6 @@ _ROBOT_CSV_CONFIGS = {
     "hightorque_pi_plus_s": HighTorquePiPlusS_CSVConfig,
     "pndbotics_adam_lite":  PNDboticsAdamLite_CSVConfig,
     "pndbotics_adam_sp":    PNDboticsAdamSp_CSVConfig,
-    "luveotics_l0_v2":      LuveoticsL0V2_CSVConfig,
 }
 
 

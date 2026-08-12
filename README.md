@@ -11,7 +11,7 @@ The pipeline applies human-to-robot scaling, multi-objective IK with joint limit
 
 This fork (**soma-retargeter-plus**) extends the original in four areas:
 
-- **More robots** — adds EngineAI T800, Hightorque Pi Plus / Pi Plus S, PND Adam Lite / Adam SP, and Luveotics L0 V2 on top of the original Unitree G1 and EngineAI PM01.
+- **More robots** — adds EngineAI T800, Hightorque Pi Plus / Pi Plus S, and PND Adam Lite / Adam SP on top of the original Unitree G1 and EngineAI PM01.
 - **More data sources** — retargets [LAFAN1](https://github.com/ubisoft/ubisoft-laforge-animation-dataset), the [Bones SEED](https://huggingface.co/datasets/bones-studio/seed) dataset, and self-captured mocap skeletons directly via `--data`, without converting them to the SOMA skeleton first.
 - **Proportion tuning** — live source position scale sliders (uniform + independent upper/lower body multipliers) for actors whose limb proportions don't match the robot, plus a **segmental scaling mode** that maps each limb segment to the robot's own segment length so IK targets always stay within reach.
 - **Scene objects** — place reference boxes in the viewport (for box-interaction motions), with save/load to JSON scene files.
@@ -29,11 +29,10 @@ This fork (**soma-retargeter-plus**) extends the original in four areas:
 | `hightorque_pi_plus_s` | `assets/pi_plus_s_bvh_to_csv_converter_config.json` | Hightorque Pi Plus S (23 DOF; 1-DOF waist) |
 | `pndbotics_adam_lite` | `assets/adam_lite_bvh_to_csv_converter_config.json` | PND Adam Lite (25 DOF) |
 | `pndbotics_adam_sp` | `assets/adam_sp_bvh_to_csv_converter_config.json` | PND Adam SP (29 DOF; 3-DOF waist, 7-DOF arms) |
-| `luveotics_l0_v2` | `assets/l0_v2_bvh_to_csv_converter_config.json` | Luveotics L0 V2 (21 DOF; no waist, 3-DOF arms, 3-DOF neck) |
 
 Set `retarget_target` in the config JSON, or pick the matching config file on the command line.
 
-> `luveotics_l0_v2` ships as a URDF (loaded via Newton's `add_urdf`); most other robots are MJCF. Loading Adam SP `.dae` meshes needs `pycollada` (`pip install pycollada`).
+> `pndbotics_adam_sp` ships as a URDF (loaded via Newton's `add_urdf`); all others are MJCF. Loading its `.dae` meshes needs `pycollada` (`pip install pycollada`).
 
 ## Requirements
 

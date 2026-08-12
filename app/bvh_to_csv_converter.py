@@ -101,7 +101,6 @@ class Viewer:
             'hightorque_pi_plus_s',
             'pndbotics_adam_lite',
             'pndbotics_adam_sp',
-            'luveotics_l0_v2',
         ]
         self.retarget_solver_options = ['Newton']
         self.retarget_solver_idx     = 0
